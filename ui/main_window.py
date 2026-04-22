@@ -12,7 +12,6 @@ import math
 import os
 
 MODPACK_VERSION  = "1.0.0"
-LAUNCHER_VERSION = "1.0.0"
 
 WIN_DEFAULT_W = 1100
 WIN_DEFAULT_H = 660
@@ -23,6 +22,17 @@ SETTINGS_ORG = "CFL"
 SETTINGS_APP = "Launcher"
 # LOGO_PATH se resuelve dinámicamente via resource_fn pasado desde main.py
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.ico")
+
+
+def _read_launcher_version():
+    path = os.path.join(os.getenv("APPDATA", ""), "CFLLauncher", "launcherVersion.txt")
+    try:
+        with open(path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return "1.0.0"   # primera vez que se abre
+
+LAUNCHER_VERSION = _read_launcher_version()
 
 def _get_logo(resource_fn=None):
     if resource_fn:

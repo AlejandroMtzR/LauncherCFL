@@ -1,0 +1,22 @@
+# Entorno virtual
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.pyc
+
+# Build
+dist/
+build/
+*.spec
+
+# Ejecutables
+*.exe
+
+# Config sensible
+.env
+
+# Otros
+*.log
+version_local.txt
