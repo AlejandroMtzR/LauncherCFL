@@ -213,15 +213,17 @@ del "%~f0"
 
     if log: log("🔄 Aplicando actualización y reiniciando...")
 
-    # Lanzar el bat en background y cerrar el launcher
+    # Lanzar el bat en background
     subprocess.Popen(
         ["cmd", "/c", bat_path],
         creationflags=subprocess.CREATE_NO_WINDOW,
         close_fds=True
     )
 
-    # Salir del launcher actual
-    sys.exit(0)
+    # Forzar cierre del PROCESO completo (no solo el hilo actual).
+    # sys.exit() desde un hilo de trabajo solo termina ese hilo y deja
+    # el launcher vivo, bloqueando el .exe y dejando al .bat esperando.
+    os._exit(0)
 
 
 

@@ -333,6 +333,8 @@ class MainScreen(QWidget):
     # ── Máquina de estados ────────────────────────────────────────
     def set_state(self, state, remote_version=""):
         self._state = state
+        if remote_version:
+            self._current_version = remote_version
 
         if state == self.S_CHECKING:
 
@@ -364,11 +366,11 @@ class MainScreen(QWidget):
 
         elif state == self.S_UPDATE:
 
-            self._main_btn.setText("INICIAR")
-            self._main_btn.setMode("play")
+            self._main_btn.setText("ACTUALIZAR MODPACK")
+            self._main_btn.setMode("update")
             self._main_btn.setEnabled(True)
 
-            self._sec_btn.setText("ACTUALIZAR")
+            self._sec_btn.setText("JUGAR IGUAL")
             self._sec_btn.show()
             self._sec_btn.setEnabled(True)
 
@@ -421,6 +423,11 @@ class MainScreen(QWidget):
                 "✅ Todo actualizado. Listo para iniciar."
             )
 
+            # Volver la insignia al estilo normal "Modpack v..."
+            version = remote_version or getattr(self, "_current_version", "")
+            if version:
+                self.update_version_badge(version)
+
         elif state == self.S_BUSY:
 
             self._main_btn.setText("PROCESANDO...")
@@ -454,7 +461,9 @@ class MainScreen(QWidget):
                                   f" color:{color}; letter-spacing:3px;")
 
     def set_done_ok(self):
-        self._bar.setValue(100); self._pct_lbl.setText("100%"); self.set_state(self.S_READY)
+        self._bar.setValue(100); self._pct_lbl.setText("100%")
+        version = getattr(self, "_current_version", "")
+        self.set_state(self.S_READY, version)
 
     def set_status_text(self, text): self._st_lbl.setText(text.upper())
     def on_progress(self, v): self._bar.setValue(v); self._pct_lbl.setText(f"{v}%")
@@ -470,8 +479,8 @@ class MainScreen(QWidget):
         if self._state in (self.S_NONE, self.S_ERROR):
             self.request_action.emit("install")
         elif self._state in (self.S_READY, self.S_UPDATE):
-            self.request_action.emit("play")
+            self.request_action.emit("update")
 
     def _on_sec(self):
         if self._state == self.S_UPDATE:
-            self.request_action.emit("update")
+            self.request_action.emit("play")
