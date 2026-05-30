@@ -2,6 +2,13 @@
 .venv/
 venv/
 
+
+.venv311/
+
+
+dist/
+build/
+
 # Python
 __pycache__/
 *.pyc
