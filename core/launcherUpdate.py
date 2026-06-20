@@ -168,61 +168,69 @@ def download_new_exe(url: str, log=None, progress=None):
 
 # REEMPLAZAR Y REINICIAR
 
-def apply_update(new_exe_path: str, log=None):
+def apply_update(new_exe_path: str, version: str = "", log=None):
     """
-    Escribe un .bat que:
-      1. Espera a que este proceso cierre
-      2. Reemplaza el .exe actual por el nuevo
-      3. Inicia el nuevo launcher
-      4. Se borra a sí mismo
-
-    Luego lanza el .bat y cierra el launcher actual.
+    Escribe un .bat que espera a que cierre este proceso, reemplaza el .exe
+    (con reintentos), marca la versión SOLO si la copia funcionó, y reinicia.
     """
     current_exe = sys.executable if getattr(sys, "frozen", False) else None
 
     if not current_exe:
-        # En desarrollo (no compilado) — solo avisar
         if log: log("⚠️ Modo desarrollo: el reemplazo automático solo funciona en el .exe compilado")
         if log: log(f"   Nuevo launcher en: {new_exe_path}")
         return
 
     bat_path = os.path.join(os.getenv("TEMP", APP_DIR), "cfl_update.bat")
+    pid = os.getpid()
 
     bat_content = f"""@echo off
-:: Esperar a que el launcher actual cierre
+chcp 65001 >nul
+
+rem ── 1) Esperar a que el launcher actual cierre (por PID, robusto) ──
 :wait
-tasklist /FI "PID eq {os.getpid()}" 2>nul | find /I "CFL" >nul
+tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
 if not errorlevel 1 (
     timeout /t 1 /nobreak >nul
     goto wait
 )
 
-:: Reemplazar el exe
-copy /Y "{new_exe_path}" "{current_exe}"
+rem ── 2) Reemplazar el exe (con reintentos por si sigue bloqueado) ──
+set _tries=0
+:copyloop
+copy /Y "{new_exe_path}" "{current_exe}" >nul
+if not errorlevel 1 goto copyok
+set /a _tries+=1
+if %_tries% geq 10 goto copyfail
+timeout /t 1 /nobreak >nul
+goto copyloop
 
-:: Iniciar el nuevo launcher
+rem ── 3a) Copia OK: AHORA sí marcar versión nueva y arrancar ──
+:copyok
+>"{LOCAL_VERSION_FILE}" echo {version}
+start "" "{current_exe}"
+goto cleanup
+
+rem ── 3b) Falló la copia: NO marcar versión, relanzar la actual ──
+:copyfail
 start "" "{current_exe}"
 
-:: Limpiar temp
-del "{new_exe_path}"
-del "%~f0"
+:cleanup
+del "{new_exe_path}" >nul 2>&1
+del "%~f0" >nul 2>&1
 """
 
-    with open(bat_path, "w") as f:
+    with open(bat_path, "w", encoding="utf-8") as f:
         f.write(bat_content)
 
     if log: log("🔄 Aplicando actualización y reiniciando...")
 
-    # Lanzar el bat en background
     subprocess.Popen(
         ["cmd", "/c", bat_path],
         creationflags=subprocess.CREATE_NO_WINDOW,
         close_fds=True
     )
 
-    # Forzar cierre del PROCESO completo (no solo el hilo actual).
-    # sys.exit() desde un hilo de trabajo solo termina ese hilo y deja
-    # el launcher vivo, bloqueando el .exe y dejando al .bat esperando.
+    # Cierre del PROCESO completo (no solo el hilo).
     os._exit(0)
 
 
@@ -247,9 +255,8 @@ def run_launcher_update(log=None, progress=None, on_no_update=None):
 
     try:
         new_exe = download_new_exe(url, log=log, progress=progress)
-        save_local_version(version)
-        apply_update(new_exe, log=log)
+        apply_update(new_exe, version, log=log)  # ← la versión se guarda dentro del .bat
     except Exception as e:
         if log: log(f"❌ No se pudo actualizar el launcher: {e}")
         if on_no_update:
-            on_no_update()   # continuar aunque falle el update
+            on_no_update()

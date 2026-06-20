@@ -137,6 +137,10 @@ class MainWindow(QWidget):
         self._launcher_update_thread.start()
 
     def _on_launcher_check_done(self, updated):
+        if updated:
+            # El launcher se va a reemplazar y reiniciar solo; no seguimos.
+            self._splash.set_status("Actualizando launcher, reiniciando...")
+            return
         self._splash.set_status("Verificando modpack...")
         self._splash.hide_progress()
         self._checker = CheckWorker()

@@ -4,7 +4,7 @@ downloader.py — SOLO descarga el ZIP desde Drive.
     El Worker es quien orquesta descarga → instalación.
 """
 import requests
-from config import MODPACK_LINK_URL, ZIP_NAME
+from config import ZIP_NAME
 import time
 import re
 
@@ -12,10 +12,10 @@ import re
 # =========================
 # 🔥 OBTENER LINK REAL
 # =========================
-def get_modpack_url(log_callback):
+def get_modpack_url(log_callback, link_url):
     log_callback("Conectando a servidor...")
     try:
-        text  = requests.get(MODPACK_LINK_URL, timeout=10).text.strip()
+        text  = requests.get(link_url, timeout=10).text.strip()
         match = re.search(r'https?://\S+', text)
         if not match:
             raise Exception("No se encontró un link válido en el servidor")
@@ -162,8 +162,8 @@ def download_with_gdown(url, log_callback, progress_callback):
 # =========================
 # 🔥 DESCARGA PRINCIPAL
 # =========================
-def download_modpack(progress_callback, log_callback):
-    url = get_modpack_url(log_callback)
+def download_modpack(progress_callback, log_callback, link_url):
+    url = get_modpack_url(log_callback, link_url)      # ← ahora usa el link que le pasen
     log_callback("────────────────────────────")
     log_callback("Conectando con Drive...")
 

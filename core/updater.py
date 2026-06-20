@@ -7,12 +7,16 @@ def get_remote_version(log=None):
         if log:
             log("🌐 Consultando versión en servidor...")
 
-        r = requests.get(VERSION_URL, headers={"Cache-Control": "no-cache"})
+        r = requests.get(VERSION_URL, headers={"Cache-Control": "no-cache"}, timeout=10)
+        r.raise_for_status()
         version = r.text.strip()
+
+        # Drive a veces devuelve HTML en vez del texto → versión inválida
+        if not version or "<html" in version.lower() or len(version) > 64:
+            raise Exception("Respuesta inválida del servidor de versión")
 
         if log:
             log(f"🌍 Versión remota: {version}")
-
         return version
 
     except Exception as e:

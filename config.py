@@ -11,8 +11,8 @@ os.makedirs(APP_DIR, exist_ok=True)
 #  URLs DE DRIVE
 # =========================
 VERSION_URL      = "https://drive.google.com/uc?export=download&id=1oXrV3xaCtD106nNH7iVujnVDPRZfCIEU"
-MODPACK_LINK_URL = "https://drive.google.com/uc?export=download&id=13KFXY61-Fqm_HoSL6vyb110Y7pGyuS6-"
-
+MODPACK_FULL_LINK_URL = "https://drive.google.com/uc?export=download&id=13KFXY61-Fqm_HoSL6vyb110Y7pGyuS6-"
+MODPACK_UPDATE_LINK_URL = "https://drive.google.com/uc?export=download&id=1o-E25jsyXs8JEEEImY7uac-lxFfJuBil"
 # =========================
 #  ARCHIVOS LOCALES
 # Todos en %APPDATA%\CFLLauncher\
@@ -40,6 +40,8 @@ GALLERY_IMAGES = [
     "https://drive.google.com/file/d/1yw8_5HeZQThxS931TjoHI-t6Pt-jWe_2/view",
     "https://drive.google.com/file/d/1ohXQzVz6h2kHwO3gY8o16bnWhSFCeXtP/view",
     "https://drive.google.com/file/d/1JH6Ntg29bdtOe1Hw9XkqkxdSkf4ODqHi/view",
+    "https://drive.google.com/file/d/1PYqEUX0qLQfRo65KOLbMtOncASle3AfH/view",
+    "https://drive.google.com/file/d/1Q9-8O7RdaHvzGhBA1HMfChnHQmnE_vv-/view",
 
 ]
 
