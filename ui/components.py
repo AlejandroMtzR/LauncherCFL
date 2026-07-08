@@ -158,9 +158,9 @@ class Spinner(QWidget):
 #   BARRA DE PROGRESO CON GLOW
 
 class GlowBar(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, height=10):
         super().__init__(parent)
-        self.setFixedHeight(5)
+        self.setFixedHeight(height)
         self._val  = 0
         self._anim = 0.0
         t = QTimer(self); t.timeout.connect(self._tick); t.start(40)
@@ -175,16 +175,18 @@ class GlowBar(QWidget):
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height(); r = 2
-        p.setPen(Qt.NoPen); p.setBrush(QColor(255, 255, 255, 8))
-        p.drawRoundedRect(0, 0, w, h, r + 1, r + 1)
+        w, h = self.width(), self.height()
+        r = max(4, h // 2)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(255, 255, 255, 11))
+        p.drawRoundedRect(0, 0, w, h, r, r)
         if self._val <= 0:
             return
         fill = int(w * self._val / 100)
         ar, ag, ab = T.ACCENT_RGB
         for i in range(4, 0, -1):
             p.setBrush(QColor(ar, ag, ab, 9 * i))
-            p.drawRoundedRect(-i, -1, fill + i * 2, h + 2, r + 1, r + 1)
+            p.drawRoundedRect(-i, -1, fill + i * 2, h + 2, r, r)
         g = QLinearGradient(0, 0, fill, 0)
         s = self._anim
         g.setColorAt(max(0.0, s - 0.4), QColor(T.ACCENT_LO))
@@ -201,11 +203,11 @@ class LogBox(QTextEdit):
         super().__init__()
         self.setReadOnly(True)
         self.document().setMaximumBlockCount(400)
-        self.setFont(QFont(T.FONT_MONO, 9))
+        self.setFont(QFont(T.FONT_MONO, 10))
         self.setStyleSheet(f"""
-            QTextEdit {{ background: transparent; border: none; padding: 0px; }}
-            QScrollBar:vertical {{ background: transparent; width: 4px; }}
-            QScrollBar::handle:vertical {{ background: {T.rgba(T.MUTED, 0.4)}; border-radius: 2px; min-height: 16px; }}
+            QTextEdit {{ background: transparent; border: none; padding: 2px 0px; }}
+            QScrollBar:vertical {{ background: transparent; width: 7px; }}
+            QScrollBar::handle:vertical {{ background: {T.rgba(T.MUTED, 0.45)}; border-radius: 3px; min-height: 20px; }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         """)
 
@@ -219,7 +221,7 @@ class LogBox(QTextEdit):
         elif "|" in text and ("MB" in text or "%" in text):                  c = T.TEXT2
         else:                                                                 c = T.MUTED
         self.append(
-            f'<span style="color:{c};font-family:{T.FONT_MONO},Consolas;font-size:9pt">'
+            f'<span style="color:{c};font-family:{T.FONT_MONO},Consolas;font-size:10pt">'
             f'&gt; {t}</span>'
         )
         self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())

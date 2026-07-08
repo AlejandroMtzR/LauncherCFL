@@ -53,6 +53,18 @@ def _installed_forge_ids(mc_dir):
     return sorted(out)
 
 
+def list_installed_forge_versions():
+    mc_dir = _mc_dir()
+    vdir = os.path.join(mc_dir, "versions")
+    if not os.path.isdir(vdir):
+        return []
+    out = []
+    for name in os.listdir(vdir):
+        if "-forge-" in name and _version_installed(mc_dir, name):
+            out.append(name)
+    return sorted(out)
+
+
 # ── Instalación de versión / Forge ────────────────────────────────────────
 def ensure_vanilla(version: str, log, progress) -> None:
     mc_dir = _mc_dir()
@@ -140,6 +152,14 @@ def play_vanilla(version, account, log, progress, ram_gb=4):
     ensure_vanilla(version, log, progress)
     progress(100)
     return launch_version(version, account, log, ram_gb=ram_gb)
+
+
+def play_installed(version_id, account, log, progress, ram_gb=4):
+    mc_dir = _mc_dir()
+    if not _version_installed(mc_dir, version_id):
+        raise RuntimeError(f"La version {version_id} no esta instalada")
+    progress(100)
+    return launch_version(version_id, account, log, ram_gb=ram_gb)
 
 
 # ── PREMIUM (opción A): abrir el launcher oficial ─────────────────────────

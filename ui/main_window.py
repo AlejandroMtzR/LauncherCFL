@@ -1,5 +1,5 @@
 
-from PySide6.QtWidgets import QWidget, QStackedWidget, QSizeGrip, QApplication, QDialog
+from PySide6.QtWidgets import QWidget, QStackedWidget, QSizeGrip, QApplication, QMessageBox
 from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtGui import QPainter, QColor
 
@@ -7,7 +7,6 @@ from . import theme as T
 from .components import BgPainter
 from .screens import SplashScreen, MainScreen
 from .account_screen import AccountScreen
-from .version_dialog import VersionDialog
 from .workers import Worker, LauncherUpdateWorker, CheckWorker
 from .play_worker import PlayWorker
 from core.game_launcher import launch_minecraft
@@ -110,6 +109,7 @@ class MainWindow(QWidget):
 
         self._account_screen.account_ready.connect(self._on_account_ready)
         self._main.request_action.connect(self._on_action)
+        self._main.account_changed.connect(self._on_main_account_changed)
         self._main._min_btn.clicked.connect(self.showMinimized)
         self._main._close_btn.clicked.connect(self.close)
 
@@ -178,6 +178,8 @@ class MainWindow(QWidget):
         self._stack.setCurrentWidget(self._main)
         state = getattr(self, "_check_state", "ready")
         version = getattr(self, "_check_version", "")
+        self._main.set_account_mode(getattr(self._account, "mode", ""))
+        self._main.set_account(self._account)
         if state == "not_installed":
             self._main.set_state(MainScreen.S_NONE, version)
         elif state == "update":
@@ -189,14 +191,53 @@ class MainWindow(QWidget):
 
     # ── Acciones ──────────────────────────────────────────────────
     def _on_action(self, action):
-        if   action == "play":    self._do_play()
-        elif action == "install": self._start_worker(False)
-        elif action == "update":  self._start_worker(True)
+        if   action == "play":      self._do_play("modpack")
+        elif action == "home_play": self._on_home_play()
+        elif action == "install":   self._start_worker(False)
+        elif action == "update":    self._start_worker(True)
+
+    def _on_main_account_changed(self, account):
+        self._account = account
+
+    def _on_home_play(self):
+        acc = self._account
+        if acc is None:
+            self._account_screen.reset()
+            self._stack.setCurrentWidget(self._account_screen)
+            return
+
+        target = self._main.home_target()
+        state = getattr(self, "_check_state", "ready")
+
+        if acc.mode == "premium":
+            if target == "modpack" and state in ("not_installed", "error"):
+                self._start_worker(False)
+            elif target == "modpack" and state == "update":
+                self._start_worker(True)
+            else:
+                QMessageBox.information(
+                    self,
+                    "CFL Launcher",
+                    "Esta parte es para NO PREMIUM. Continuando al launcher premium.",
+                )
+                self._do_play("modpack")
+            return
+
+        if target == "modpack":
+            if state in ("not_installed", "error"):
+                self._start_worker(False)
+            elif state == "update":
+                self._start_worker(True)
+            else:
+                self._do_play("modpack")
+        else:
+            self._do_play(target)
 
     def _start_worker(self, force_update):
         if self._busy:
             return
         self._busy = True
+        self._pre_worker_state = getattr(self, "_check_state", "ready")
         self._main.set_state(MainScreen.S_BUSY)
         self._worker = Worker(force_update=force_update)
         self._worker.progress.connect(self._main.on_progress)
@@ -208,8 +249,10 @@ class MainWindow(QWidget):
     def _on_done(self, ok):
         self._busy = False
         if ok:
+            self._check_state = "ready"
             self._main.set_done_ok()
         else:
+            self._check_state = getattr(self, "_pre_worker_state", "not_installed")
             self._main.set_state(MainScreen.S_ERROR)
 
     # ── Candado anti-doble-clic ───────────────────────────────────
@@ -217,6 +260,8 @@ class MainWindow(QWidget):
         self._launch_lock = True
         try:
             self._main._main_btn.setEnabled(False)
+            if hasattr(self._main, "_modpack_action_btn"):
+                self._main._modpack_action_btn.setEnabled(False)
         except Exception:
             pass
         if cooldown_ms > 0:
@@ -226,12 +271,13 @@ class MainWindow(QWidget):
         self._launch_lock = False
         try:
             if not self._busy:
-                self._main._main_btn.setEnabled(True)
+                self._main._update_home_state()
+                self._main._update_modpack_page_state()
         except Exception:
             pass
 
     # ── Jugar ─────────────────────────────────────────────────────
-    def _do_play(self):
+    def _do_play(self, target="modpack"):
         # Evita abrir dos veces por doble clic o por instalación instantánea.
         if self._launch_lock or self._busy:
             return
@@ -248,16 +294,12 @@ class MainWindow(QWidget):
             launch_minecraft(self._main.append_log)
             return
 
-        # No premium: primero elige versión (modpack o vanilla)
-        dlg = VersionDialog(self)
-        if dlg.exec() != QDialog.Accepted:
-            return
-        target = dlg.selected
-
         self._busy = True
+        self._pre_play_state = getattr(self, "_check_state", "ready")
+        self._play_target = target
         self._lock_play(0)  # bloquear; se libera con enfriamiento en _on_play_done
         self._main.set_state(MainScreen.S_BUSY)
-        self._play_worker = PlayWorker(acc, target=target, ram_gb=6)
+        self._play_worker = PlayWorker(acc, target=target, ram_gb=self._main.ram_gb())
         self._play_worker.progress.connect(self._main.on_progress)
         self._play_worker.log.connect(self._main.append_log)
         self._play_worker.done.connect(self._on_play_done)
@@ -266,9 +308,31 @@ class MainWindow(QWidget):
     def _on_play_done(self, ok):
         self._busy = False
         if ok:
-            self._main.set_state(MainScreen.S_READY, getattr(self, "_check_version", ""))
+            target = getattr(self, "_play_target", "modpack")
+            if target == "modpack":
+                self._check_state = "ready"
+                self._main.set_state(MainScreen.S_READY, getattr(self, "_check_version", ""))
+            else:
+                state = getattr(self, "_pre_play_state", "ready")
+                if state == "not_installed":
+                    self._main.set_state(MainScreen.S_NONE, getattr(self, "_check_version", ""))
+                elif state == "update":
+                    self._main.set_state(MainScreen.S_UPDATE, getattr(self, "_check_version", ""))
+                else:
+                    self._main.set_state(MainScreen.S_READY, getattr(self, "_check_version", ""))
             self._main.append_log("⏳ Iniciando Minecraft, espera unos segundos...")
             self._lock_play(12000)  # enfriamiento: evita relanzar por doble clic
         else:
             self._release_lock()
-            self._main.set_state(MainScreen.S_ERROR)
+            target = getattr(self, "_play_target", "modpack")
+            state = getattr(self, "_pre_play_state", "not_installed")
+            if target == "modpack":
+                self._check_state = "error"
+                self._main.set_state(MainScreen.S_ERROR)
+            else:
+                if state == "update":
+                    self._main.set_state(MainScreen.S_UPDATE, getattr(self, "_check_version", ""))
+                elif state == "ready":
+                    self._main.set_state(MainScreen.S_READY, getattr(self, "_check_version", ""))
+                else:
+                    self._main.set_state(MainScreen.S_NONE, getattr(self, "_check_version", ""))

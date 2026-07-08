@@ -20,9 +20,13 @@ class PlayWorker(QThread):
                 game_launcher.play_modpack(
                     self._account, self.log.emit, self.progress.emit, ram_gb=self._ram)
             else:
-                _, version = self._target
-                game_launcher.play_vanilla(
-                    version, self._account, self.log.emit, self.progress.emit, ram_gb=self._ram)
+                kind, version = self._target
+                if kind == "installed":
+                    game_launcher.play_installed(
+                        version, self._account, self.log.emit, self.progress.emit, ram_gb=self._ram)
+                else:
+                    game_launcher.play_vanilla(
+                        version, self._account, self.log.emit, self.progress.emit, ram_gb=self._ram)
             self.done.emit(True)
         except Exception as e:
             self.log.emit(f"❌ Error al lanzar: {e}")
