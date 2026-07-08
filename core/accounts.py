@@ -1,13 +1,21 @@
+# -*- coding: utf-8 -*-
+"""
+core/accounts.py
+Manejo de cuentas: PREMIUM (Microsoft) u OFFLINE (no premium).
 
+El UUID offline se calcula IGUAL que lo hace el servidor en online-mode=false
+(UUID v3 de "OfflinePlayer:<nombre>"), así los datos del jugador PERSISTEN
+en ChafaLand entre sesiones.
+"""
 
 import os
 import re
 import json
+import shutil
 import hashlib
 import uuid as _uuid
 from dataclasses import dataclass, asdict
 
-# Usa tu APP_DIR de config.py (%APPDATA%\CFLLauncher\)
 try:
     from config import APP_DIR
 except Exception:
@@ -15,8 +23,10 @@ except Exception:
     os.makedirs(APP_DIR, exist_ok=True)
 
 ACCOUNT_FILE = os.path.join(APP_DIR, "account.json")
+SKINS_DIR = os.path.join(APP_DIR, "skins")
+os.makedirs(SKINS_DIR, exist_ok=True)
 
-# Reglas de nombre de Minecraft: 3-16 chars, letras/números/guion bajo
+# Nombre de Minecraft: 3-16 chars, letras/números/guion bajo
 _NAME_RE = re.compile(r"^[A-Za-z0-9_]{3,16}$")
 
 
@@ -35,14 +45,14 @@ def offline_uuid(name: str) -> str:
 
 @dataclass
 class Account:
-    mode: str            # "offline" | "premium"
+    mode: str                 # "offline" | "premium"
     username: str
     uuid: str
-    token: str = "0"     # offline: dummy. premium: access_token real
-    refresh_token: str = ""  # solo premium (para re-loguear sin pedir password)
+    token: str = "0"          # offline: dummy. premium: access_token real
+    refresh_token: str = ""   # solo premium
+    skin_path: str = ""       # ruta local a la skin .png (opcional, offline)
 
     def to_options(self) -> dict:
-        """Opciones que espera minecraft_launcher_lib.command.get_minecraft_command"""
         return {
             "username": self.username,
             "uuid": self.uuid,
@@ -50,10 +60,23 @@ class Account:
         }
 
 
-def make_offline(name: str) -> Account:
+def save_skin(name: str, src_png: str) -> str:
+    """Copia la skin elegida a %APPDATA%\\CFLLauncher\\skins\\<nombre>.png."""
+    dst = os.path.join(SKINS_DIR, f"{name}.png")
+    shutil.copy2(src_png, dst)
+    return dst
+
+
+def make_offline(name: str, skin_path: str = "") -> Account:
     if not is_valid_name(name):
         raise ValueError("Nombre inválido: usa 3-16 letras, números o _")
-    return Account(mode="offline", username=name, uuid=offline_uuid(name), token="0")
+    return Account(
+        mode="offline",
+        username=name,
+        uuid=offline_uuid(name),
+        token="0",
+        skin_path=skin_path or "",
+    )
 
 
 # ── Persistencia ──────────────────────────────────────────────────────────
@@ -68,6 +91,7 @@ def load() -> Account | None:
     try:
         with open(ACCOUNT_FILE, "r", encoding="utf-8") as f:
             d = json.load(f)
+        d.setdefault("skin_path", "")
         return Account(**d)
     except Exception:
         return None

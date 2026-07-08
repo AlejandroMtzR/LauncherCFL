@@ -1,13 +1,17 @@
 
-from PySide6.QtWidgets import QWidget, QStackedWidget, QSizeGrip, QApplication
+from PySide6.QtWidgets import QWidget, QStackedWidget, QSizeGrip, QApplication, QDialog
 from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtGui import QPainter, QColor
 
 from . import theme as T
 from .components import BgPainter
 from .screens import SplashScreen, MainScreen
+from .account_screen import AccountScreen
+from .version_dialog import VersionDialog
 from .workers import Worker, LauncherUpdateWorker, CheckWorker
+from .play_worker import PlayWorker
 from core.game_launcher import launch_minecraft
+from core import accounts
 
 WIN_DEFAULT_W = 1100
 WIN_DEFAULT_H = 660
@@ -27,7 +31,13 @@ class MainWindow(QWidget):
         self.setAttribute(Qt.WA_TranslucentBackground)
         self._drag_pos = None
         self._busy = False
+        self._account = None
+        self._launch_lock = False
         self._settings = QSettings(SETTINGS_ORG, SETTINGS_APP)
+
+        self._lock_timer = QTimer(self)
+        self._lock_timer.setSingleShot(True)
+        self._lock_timer.timeout.connect(self._release_lock)
 
         screen = QApplication.primaryScreen().availableGeometry()
         def_w = min(WIN_DEFAULT_W, int(screen.width() * 0.85))
@@ -90,12 +100,15 @@ class MainWindow(QWidget):
         self._stack.setGeometry(0, 0, w, h)
         self._stack.setStyleSheet("background:transparent;")
 
-        self._splash = SplashScreen(resource_fn=self._resource_fn)
-        self._main   = MainScreen(resource_fn=self._resource_fn)
+        self._splash  = SplashScreen(resource_fn=self._resource_fn)
+        self._account_screen = AccountScreen(resource_fn=self._resource_fn)
+        self._main    = MainScreen(resource_fn=self._resource_fn)
         self._stack.addWidget(self._splash)
+        self._stack.addWidget(self._account_screen)
         self._stack.addWidget(self._main)
-        self._stack.setCurrentIndex(0)
+        self._stack.setCurrentWidget(self._splash)
 
+        self._account_screen.account_ready.connect(self._on_account_ready)
         self._main.request_action.connect(self._on_action)
         self._main._min_btn.clicked.connect(self.showMinimized)
         self._main._close_btn.clicked.connect(self.close)
@@ -103,8 +116,7 @@ class MainWindow(QWidget):
         self._border = QWidget(self)
         self._border.setGeometry(0, 0, w, h)
         self._border.setStyleSheet(
-            f"background:transparent; border:1px solid {T.BORDER}; border-radius:14px;"
-        )
+            f"background:transparent; border:1px solid {T.BORDER}; border-radius:14px;")
         self._border.setAttribute(Qt.WA_TransparentForMouseEvents)
 
         self._grip = QSizeGrip(self)
@@ -132,7 +144,6 @@ class MainWindow(QWidget):
 
     def _on_launcher_check_done(self, updated):
         if updated:
-            # El launcher se va a reemplazar y reiniciar solo; no seguimos.
             self._splash.set_status("Actualizando launcher, reiniciando...")
             return
         self._splash.set_status("Verificando modpack...")
@@ -145,11 +156,26 @@ class MainWindow(QWidget):
         self._check_state = state
         self._check_version = version
         self._splash.set_status("Listo")
-        QTimer.singleShot(500, self._show_main)
+        QTimer.singleShot(400, self._gate_account)
+
+    # ── Puerta de cuenta ──────────────────────────────────────────
+    def _gate_account(self):
+        saved = accounts.load()
+        if saved:
+            self._account = saved
+            self._show_main()
+        else:
+            self._splash.stop()
+            self._account_screen.reset()
+            self._stack.setCurrentWidget(self._account_screen)
+
+    def _on_account_ready(self, account):
+        self._account = account
+        self._show_main()
 
     def _show_main(self):
         self._splash.stop()
-        self._stack.setCurrentIndex(1)
+        self._stack.setCurrentWidget(self._main)
         state = getattr(self, "_check_state", "ready")
         version = getattr(self, "_check_version", "")
         if state == "not_installed":
@@ -186,6 +212,63 @@ class MainWindow(QWidget):
         else:
             self._main.set_state(MainScreen.S_ERROR)
 
+    # ── Candado anti-doble-clic ───────────────────────────────────
+    def _lock_play(self, cooldown_ms):
+        self._launch_lock = True
+        try:
+            self._main._main_btn.setEnabled(False)
+        except Exception:
+            pass
+        if cooldown_ms > 0:
+            self._lock_timer.start(cooldown_ms)
+
+    def _release_lock(self):
+        self._launch_lock = False
+        try:
+            if not self._busy:
+                self._main._main_btn.setEnabled(True)
+        except Exception:
+            pass
+
+    # ── Jugar ─────────────────────────────────────────────────────
     def _do_play(self):
-        self._main.append_log("🎮 Abriendo Minecraft Launcher...")
-        launch_minecraft(self._main.append_log)
+        # Evita abrir dos veces por doble clic o por instalación instantánea.
+        if self._launch_lock or self._busy:
+            return
+
+        acc = self._account
+        if acc is None:
+            self._account_screen.reset()
+            self._stack.setCurrentWidget(self._account_screen)
+            return
+
+        if acc.mode == "premium":
+            self._lock_play(6000)  # enfriamiento
+            self._main.append_log("🎮 Abriendo Minecraft Launcher...")
+            launch_minecraft(self._main.append_log)
+            return
+
+        # No premium: primero elige versión (modpack o vanilla)
+        dlg = VersionDialog(self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        target = dlg.selected
+
+        self._busy = True
+        self._lock_play(0)  # bloquear; se libera con enfriamiento en _on_play_done
+        self._main.set_state(MainScreen.S_BUSY)
+        self._play_worker = PlayWorker(acc, target=target, ram_gb=6)
+        self._play_worker.progress.connect(self._main.on_progress)
+        self._play_worker.log.connect(self._main.append_log)
+        self._play_worker.done.connect(self._on_play_done)
+        self._play_worker.start()
+
+    def _on_play_done(self, ok):
+        self._busy = False
+        if ok:
+            self._main.set_state(MainScreen.S_READY, getattr(self, "_check_version", ""))
+            self._main.append_log("⏳ Iniciando Minecraft, espera unos segundos...")
+            self._lock_play(12000)  # enfriamiento: evita relanzar por doble clic
+        else:
+            self._release_lock()
+            self._main.set_state(MainScreen.S_ERROR)
