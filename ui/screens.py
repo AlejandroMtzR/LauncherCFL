@@ -14,6 +14,7 @@ from .mods_page import ModsPage
 from .gallery import Lightbox
 from .mods_page import ModsPage, HeroBanner
 from core.utils import resource_path
+from core.launcherUpdate import LAUNCHER_VERSION as APP_VERSION
 
 MODPACK_VERSION = "1.0.0"
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.ico")
@@ -23,9 +24,9 @@ def _read_launcher_version():
     path = os.path.join(os.getenv("APPDATA", ""), "CFLLauncher", "launcherVersion.txt")
     try:
         with open(path) as f:
-            return f.read().strip()
+            return f.read().strip() or APP_VERSION
     except FileNotFoundError:
-        return "1.0.0"
+        return APP_VERSION
 
 LAUNCHER_VERSION = _read_launcher_version()
 
@@ -478,8 +479,10 @@ class MainScreen(QWidget):
     def _on_main(self):
         if self._state in (self.S_NONE, self.S_ERROR):
             self.request_action.emit("install")
-        elif self._state in (self.S_READY, self.S_UPDATE):
+        elif self._state == self.S_UPDATE:
             self.request_action.emit("update")
+        elif self._state == self.S_READY:
+            self.request_action.emit("play")    # ← JUGAR ahora SÍ abre Minecraft
 
     def _on_sec(self):
         if self._state == self.S_UPDATE:

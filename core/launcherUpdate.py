@@ -1,4 +1,4 @@
-"""
+r"""
 launcherUpdate.py
 Auto-actualización del launcher desde GitHub Releases.
 
@@ -23,6 +23,9 @@ GITHUB_USER  = "AlejandroMtzR"
 GITHUB_REPO  = "LauncherCFL"
 EXE_NAME     = "CFL-Launcher.exe"
 
+
+LAUNCHER_VERSION = "4.1.4"
+
 API_URL      = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest"
 HEADERS      = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 
@@ -37,9 +40,9 @@ os.makedirs(APP_DIR, exist_ok=True)
 def get_local_version():
     try:
         with open(LOCAL_VERSION_FILE) as f:
-            return f.read().strip()
+            return f.read().strip() or LAUNCHER_VERSION
     except FileNotFoundError:
-        return "0.0.0"
+        return LAUNCHER_VERSION
 
 
 def save_local_version(version: str):
@@ -117,7 +120,7 @@ def check_launcher_update(log=None):
 # DESCARGAR NUEVO .EXE
 
 def download_new_exe(url: str, log=None, progress=None):
-    """
+    r"""
     Descarga el nuevo .exe a %TEMP%\CFL-Launcher-new.exe
     Retorna la ruta del archivo descargado.
     """
@@ -181,18 +184,24 @@ def apply_update(new_exe_path: str, version: str = "", log=None):
         return
 
     bat_path = os.path.join(os.getenv("TEMP", APP_DIR), "cfl_update.bat")
-    pid = os.getpid()
+    # En --onefile hay 2 procesos (bootloader + python); esperar por NOMBRE de
+    # imagen los cubre a ambos. Esto evita copiar/relanzar antes de tiempo,
+    # que es lo que provoca el error "Failed to load Python DLL" al reabrir.
+    exe_name = os.path.basename(current_exe)
 
     bat_content = f"""@echo off
 chcp 65001 >nul
 
-rem ── 1) Esperar a que el launcher actual cierre (por PID, robusto) ──
+rem ── 1) Esperar a que el launcher cierre POR COMPLETO (todos los procesos) ──
 :wait
-tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul
+tasklist /FI "IMAGENAME eq {exe_name}" 2>nul | find /I "{exe_name}" >nul
 if not errorlevel 1 (
     timeout /t 1 /nobreak >nul
     goto wait
 )
+
+rem    Margen para que Windows libere el candado del .exe.
+timeout /t 2 /nobreak >nul
 
 rem ── 2) Reemplazar el exe (con reintentos por si sigue bloqueado) ──
 set _tries=0
@@ -200,12 +209,16 @@ set _tries=0
 copy /Y "{new_exe_path}" "{current_exe}" >nul
 if not errorlevel 1 goto copyok
 set /a _tries+=1
-if %_tries% geq 10 goto copyfail
+if %_tries% geq 15 goto copyfail
 timeout /t 1 /nobreak >nul
 goto copyloop
 
-rem ── 3a) Copia OK: AHORA sí marcar versión nueva y arrancar ──
+rem ── 3a) Copia OK ──────────────────────────────────────────────────────
+rem    Dejar que el .exe recién escrito se asiente en disco y que el
+rem    antivirus termine de escanearlo ANTES de relanzar. Sin esta pausa,
+rem    el bootloader --onefile falla al descomprimir python311.dll (error 126).
 :copyok
+timeout /t 3 /nobreak >nul
 >"{LOCAL_VERSION_FILE}" echo {version}
 start "" "{current_exe}"
 goto cleanup

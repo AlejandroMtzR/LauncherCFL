@@ -1,10 +1,4 @@
-# -*- coding: utf-8 -*-
-"""
-MainWindow: el "cascarón" de la ventana. Solo se encarga de la ventana sin
-bordes (arrastrar, redimensionar, persistencia de tamaño/posición) y de
-orquestar splash → verificación → pantalla principal. Toda la UI vive en
-las pantallas (screens.py) y los hilos en workers.py.
-"""
+
 from PySide6.QtWidgets import QWidget, QStackedWidget, QSizeGrip, QApplication
 from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtGui import QPainter, QColor

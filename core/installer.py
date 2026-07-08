@@ -2,6 +2,7 @@ import os
 import shutil
 import zipfile
 from config import PACK_FILE, ZIP_NAME, INSTALLED_FILE
+from core.paths import get_minecraft_dir
 
 
 # =========================
@@ -59,7 +60,7 @@ def install_modpack(log, progress):
         raise Exception(f"No se encontró el archivo: {ZIP_NAME}")
 
     appdata = os.getenv("APPDATA")
-    mc_path = os.path.join(appdata, ".minecraft")
+    mc_path = get_minecraft_dir()   # ← antes: os.path.join(appdata, ".minecraft")
 
     # ── Carpeta temporal en %TEMP% (nunca relativa) ───────────────
     temp = os.path.join(os.getenv("TEMP", appdata), "mc_modpack_temp")
