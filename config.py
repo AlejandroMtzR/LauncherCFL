@@ -10,6 +10,15 @@ os.makedirs(APP_DIR, exist_ok=True)
 # =========================
 #  URLs DE DRIVE
 # =========================
+# =========================
+#  REDES / ENLACES (barra lateral)
+#  👉 Rellena estos con tus enlaces reales. Si quedan vacíos, el botón
+#     se deshabilita solo (no queda "muerto").
+# =========================
+GITHUB_URL  = "https://github.com/AlejandroMtzR/LauncherCFL"
+DISCORD_URL = ""   # p. ej. "https://discord.gg/tuInvite"
+WEB_URL     = ""   # p. ej. "https://chafaland.example.com"
+
 VERSION_URL      = "https://drive.google.com/uc?export=download&id=1oXrV3xaCtD106nNH7iVujnVDPRZfCIEU"
 MODPACK_FULL_LINK_URL = "https://drive.google.com/uc?export=download&id=13KFXY61-Fqm_HoSL6vyb110Y7pGyuS6-"
 MODPACK_UPDATE_LINK_URL = "https://drive.google.com/uc?export=download&id=1o-E25jsyXs8JEEEImY7uac-lxFfJuBil"
