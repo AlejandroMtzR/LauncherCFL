@@ -291,7 +291,8 @@ class MainWindow(QWidget):
         if acc.mode == "premium":
             self._lock_play(6000)  # enfriamiento
             self._main.append_log("🎮 Abriendo Minecraft Launcher...")
-            launch_minecraft(self._main.append_log)
+            if launch_minecraft(self._main.append_log):
+                self._main.mark_session_started(target)
             return
 
         self._busy = True
@@ -309,6 +310,7 @@ class MainWindow(QWidget):
         self._busy = False
         if ok:
             target = getattr(self, "_play_target", "modpack")
+            self._main.mark_session_started(target)
             if target == "modpack":
                 self._check_state = "ready"
                 self._main.set_state(MainScreen.S_READY, getattr(self, "_check_version", ""))

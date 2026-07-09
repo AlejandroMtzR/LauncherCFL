@@ -15,7 +15,7 @@ from .gallery import Lightbox
 from .mods_page import ModsPage, HeroBanner
 from core.utils import resource_path
 from core.launcherUpdate import LAUNCHER_VERSION as APP_VERSION
-from core import accounts
+from core import accounts, checker, paths
 from core.game_launcher import MODPACK_FORGE_VERSION
 
 MODPACK_VERSION = "1.0.0"
@@ -359,110 +359,182 @@ class MainScreen(QWidget):
     # ── Página AJUSTES (placeholder, listo para extender) ─────────
     def _build_home_page(self):
         page = QWidget()
-        page.setStyleSheet("background:transparent;")
+        page.setStyleSheet(f"background:{T.BG};")
         ph = QVBoxLayout(page)
         ph.setContentsMargins(0, 0, 0, 0)
         ph.setSpacing(0)
 
         body = QWidget()
-        body.setStyleSheet("background:transparent;")
+        body.setStyleSheet(f"background:{T.BG};")
         body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         hl = QVBoxLayout(body)
-        hl.setContentsMargins(44, 16, 44, 12)
-        hl.setSpacing(7)
+        hl.setContentsMargins(34, 14, 34, 12)
+        hl.setSpacing(12)
 
         banner = HeroBanner(
             resource_path("assets/home_hero.png"),
             show_text=False
         )
-        banner.setFixedHeight(165)
+        banner.setFixedHeight(154)
         hl.addWidget(banner)
-        hl.addSpacing(8)
-
-        eyebrow = QLabel("CFL LAUNCHER")
-        eyebrow.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; font-weight:700;"
-                              f" color:{T.ACCENT_HI}; letter-spacing:5px;")
-        hl.addWidget(eyebrow)
-
-        title = QLabel("¿Qué quieres jugar?")
-        title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:28px; font-weight:900;"
-                            f" color:{T.TEXT};")
-        hl.addWidget(title)
-        hl.addSpacing(4)
 
         self._home_notice = QLabel("")
         self._home_notice.setWordWrap(True)
         self._home_notice.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
-                                        f" color:{T.INFO}; background:transparent;")
+                                        f" color:{T.INFO}; background:{T.rgba(T.INFO,0.08)};"
+                                        f" border:1px solid {T.rgba(T.INFO,0.20)};"
+                                        " border-radius:8px; padding:8px 10px;")
         self._home_notice.hide()
-        hl.addWidget(self._home_notice)
+
+        content_row = QHBoxLayout()
+        content_row.setSpacing(14)
+        content_row.setAlignment(Qt.AlignTop)
+
+        primary = QWidget()
+        primary.setStyleSheet("background:transparent;")
+        primary_lay = QVBoxLayout(primary)
+        primary_lay.setContentsMargins(0, 0, 0, 0)
+        primary_lay.setSpacing(12)
+
+        heading_row = QHBoxLayout()
+        heading_row.setSpacing(12)
+        title_box = QVBoxLayout()
+        title_box.setSpacing(2)
+        eyebrow = QLabel("BIENVENIDO")
+        eyebrow.setStyleSheet(f"font-family:'{T.FONT}'; font-size:9px; font-weight:800;"
+                              f" color:{T.ACCENT_HI}; letter-spacing:4px;")
+        title = QLabel("¿Qué quieres jugar hoy?")
+        title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:25px; font-weight:900;"
+                            f" color:{T.TEXT};")
+        title_box.addWidget(eyebrow)
+        title_box.addWidget(title)
+        heading_row.addLayout(title_box)
+        heading_row.addStretch()
+        primary_lay.addLayout(heading_row)
+        primary_lay.addWidget(self._home_notice)
 
         self._home_modpack_card = QFrame()
+        self._home_modpack_card.setObjectName("homeModpackCard")
         self._home_modpack_card.setCursor(Qt.PointingHandCursor)
         self._home_modpack_card.mousePressEvent = lambda e: self._select_home_modpack()
-        mc = QHBoxLayout(self._home_modpack_card)
-        mc.setContentsMargins(18, 14, 18, 14)
-        mc.setSpacing(14)
+        card_v = QVBoxLayout(self._home_modpack_card)
+        card_v.setContentsMargins(18, 16, 18, 14)
+        card_v.setSpacing(12)
 
-        icon_box = QLabel("◆")
+        mc = QHBoxLayout()
+        mc.setSpacing(16)
+
+        icon_box = QLabel("CFL")
         icon_box.setAlignment(Qt.AlignCenter)
-        icon_box.setFixedSize(48, 48)
-        icon_box.setStyleSheet(f"font-size:29px; color:{T.ACCENT};"
+        icon_box.setFixedSize(88, 88)
+        icon_box.setStyleSheet(f"font-family:'{T.FONT}'; font-size:18px; font-weight:900; color:{T.ACCENT};"
                                f" background:{T.rgba(T.ACCENT, 0.10)};"
-                               f" border:1px solid {T.rgba(T.ACCENT, 0.45)};"
-                               " border-radius:14px;")
+                               f" border:1px solid {T.rgba(T.ACCENT, 0.70)};"
+                               " border-radius:10px;")
+        px = QPixmap(get_logo(self._resource_fn))
+        if not px.isNull():
+            icon_box.setPixmap(px.scaled(58, 58, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         mc.addWidget(icon_box)
 
         txt = QVBoxLayout()
-        txt.setSpacing(2)
-        name = QLabel("ChafaLand Modpack")
-        name.setStyleSheet(f"font-family:'{T.FONT}'; font-size:17px; font-weight:900;"
-                           f" color:{T.TEXT}; background:transparent;")
-        meta = QLabel("Forge 1.20.1  ·  +340 mods")
-        meta.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
-                           f" color:{T.TEXT2}; background:transparent;")
-        txt.addWidget(name)
-        txt.addWidget(meta)
+        txt.setSpacing(5)
+        title_line = QHBoxLayout()
+        title_line.setSpacing(10)
+        self._home_title_lbl = QLabel("ChafaLand Modpack")
+        self._home_title_lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:25px; font-weight:900;"
+                                           f" color:{T.TEXT}; background:transparent;")
+        self._home_badge = QLabel("ACTUAL")
+        self._home_badge.setAlignment(Qt.AlignCenter)
+        self._home_badge.setMinimumWidth(74)
+        title_line.addWidget(self._home_title_lbl)
+        title_line.addWidget(self._home_badge, alignment=Qt.AlignVCenter)
+        title_line.addStretch()
+
+        self._home_meta_line = QLabel("")
+        self._home_meta_line.setTextFormat(Qt.RichText)
+        self._home_meta_line.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px;"
+                                           f" color:{T.TEXT2}; background:transparent;")
+        self._home_modpack_status = QLabel("Listo para jugar")
+        self._home_modpack_status.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
+                                                f" color:{T.MUTED}; background:transparent;")
+        txt.addLayout(title_line)
+        txt.addWidget(self._home_meta_line)
+        txt.addWidget(self._home_modpack_status)
+        txt.addStretch()
         mc.addLayout(txt)
         mc.addStretch()
 
-        self._home_badge = QLabel("RECOMENDADO")
-        self._home_badge.setAlignment(Qt.AlignCenter)
-        self._home_badge.setMinimumWidth(112)
-        mc.addWidget(self._home_badge)
-        hl.addWidget(self._home_modpack_card)
-        hl.addSpacing(8)
+        play_wrap = QHBoxLayout()
+        play_wrap.setSpacing(0)
+        self._main_btn = PlayBtn()
+        self._main_btn.setText("CARGANDO...")
+        self._main_btn.setEnabled(False)
+        self._main_btn.clicked.connect(self._on_home_play)
+        self._versions_toggle = QPushButton("▼")
+        self._versions_toggle.setCursor(Qt.PointingHandCursor)
+        self._versions_toggle.setFixedSize(52, 52)
+        self._versions_toggle.setStyleSheet(self._split_arrow_qss())
+        self._versions_toggle.clicked.connect(self._toggle_versions_panel)
+        play_wrap.addWidget(self._main_btn)
+        play_wrap.addWidget(self._versions_toggle)
+        mc.addLayout(play_wrap)
+        card_v.addLayout(mc)
 
-        lab = QLabel("O juega otra versión (sin mods)")
-        lab.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; font-weight:700;"
-                          f" color:{T.TEXT2};")
-        hl.addWidget(lab)
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(0)
+        self._home_stat_profile = self._make_home_stat("PERFIL ACTIVO", "Modpack v...")
+        self._home_stat_version = self._make_home_stat("VERSIÓN", "Forge 1.20.1")
+        self._home_stat_mods = self._make_home_stat("MODS INSTALADOS", "+340")
+        self._home_stat_session = self._make_home_stat("ÚLTIMA SESIÓN", "Nunca")
+        for stat in (
+            self._home_stat_profile,
+            self._home_stat_version,
+            self._home_stat_mods,
+            self._home_stat_session,
+        ):
+            stats_row.addWidget(stat)
+        card_v.addLayout(stats_row)
+        primary_lay.addWidget(self._home_modpack_card)
+
+        selector_panel = QFrame()
+        selector_panel.setObjectName("homePanel")
+        selector_panel.setVisible(False)
+        selector_panel.setStyleSheet(self._home_panel_qss())
+        self._home_versions_panel = selector_panel
+        sv = QVBoxLayout(selector_panel)
+        sv.setContentsMargins(14, 12, 14, 14)
+        sv.setSpacing(10)
+
+        lab = QLabel("Más versiones")
+        lab.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; font-weight:800;"
+                          f" color:{T.TEXT2}; background:transparent; border:none;")
+        sv.addWidget(lab)
 
         chips = QHBoxLayout()
         chips.setSpacing(8)
         chips.setAlignment(Qt.AlignLeft)
         releases = QLabel("Releases")
-        releases.setStyleSheet(f"color:{T.MUTED}; font-size:11px; background:transparent;")
+        releases.setStyleSheet(f"color:{T.MUTED}; font-size:11px; background:transparent; border:none;")
         self._home_chip_snap = self._make_home_chip("+ Snapshots", self._toggle_home_snap)
         self._home_chip_old = self._make_home_chip("+ Antiguas", self._toggle_home_old)
         chips.addWidget(releases)
         chips.addWidget(self._home_chip_snap)
         chips.addWidget(self._home_chip_old)
         chips.addStretch()
-        hl.addLayout(chips)
+        sv.addLayout(chips)
 
         self._home_version_combo = QComboBox()
-        self._home_version_combo.setFixedHeight(50)
+        self._home_version_combo.setFixedHeight(44)
         self._home_version_combo.setCursor(Qt.PointingHandCursor)
         self._home_version_combo.setStyleSheet(f"""
             QComboBox {{
-                background:{T.CARD};
+                background:{T.SURFACE};
                 border:1px solid {T.BORDER_HI};
                 border-radius:8px;
-                padding:8px 14px;
+                padding:7px 14px;
                 color:{T.TEXT};
                 font-family:'{T.FONT}';
-                font-size:13px;
+                font-size:12px;
                 font-weight:700;
             }}
             QComboBox:hover {{
@@ -484,32 +556,86 @@ class MainScreen(QWidget):
             }}
         """)
         self._home_version_combo.currentIndexChanged.connect(self._select_home_combo)
-        hl.addWidget(self._home_version_combo)
+        sv.addWidget(self._home_version_combo)
+        primary_lay.addWidget(selector_panel)
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(12)
-        btn_row.setAlignment(Qt.AlignLeft)
-        self._main_btn = PlayBtn()
-        self._main_btn.setText("CARGANDO...")
-        self._main_btn.setEnabled(False)
-        self._main_btn.clicked.connect(self._on_home_play)
-        self._sec_btn = SecBtn("...")
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(10)
+        self._open_folder_btn = QPushButton("Abrir carpeta del modpack")
+        self._open_folder_btn.setCursor(Qt.PointingHandCursor)
+        self._open_folder_btn.setStyleSheet(self._utility_btn_qss())
+        self._open_folder_btn.clicked.connect(self._open_modpack_folder)
+        actions_row.addStretch()
+        actions_row.addWidget(self._open_folder_btn)
+        primary_lay.addLayout(actions_row)
+
+        self._sec_btn = SecBtn("...", page)
         self._sec_btn.hide()
         self._chk_spin = Spinner(size=20, color=T.ACCENT_HI)
-        btn_row.addWidget(self._main_btn)
-        btn_row.addWidget(self._sec_btn)
-        btn_row.addSpacing(6)
-        btn_row.addWidget(self._chk_spin)
-        btn_row.addStretch()
-        hl.addLayout(btn_row)
         self._reload_home_versions()
 
+        status_panel = QFrame()
+        status_panel.setObjectName("homePanel")
+        status_panel.setFixedWidth(260)
+        status_panel.setStyleSheet(self._home_panel_qss())
+        sp = QVBoxLayout(status_panel)
+        sp.setContentsMargins(16, 14, 16, 14)
+        sp.setSpacing(10)
+
+        status_title = QLabel("ESTADO DEL LAUNCHER")
+        status_title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; font-weight:900;"
+                                   f" color:{T.ACCENT_HI}; letter-spacing:2px;"
+                                   " background:transparent; border:none;")
+        sp.addWidget(status_title)
+
+        self._home_selected_lbl = QLabel("ChafaLand Modpack")
+        self._home_selected_lbl.setWordWrap(True)
+        self._home_selected_lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:17px; font-weight:900;"
+                                              f" color:{T.TEXT}; background:transparent; border:none;")
+        sp.addWidget(self._home_selected_lbl)
+
+        self._home_account_lbl = QLabel("Perfil: no cargado")
+        self._home_account_lbl.setWordWrap(True)
+        self._home_account_lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px;"
+                                             f" color:{T.TEXT}; background:transparent; border:none;")
+        sp.addWidget(self._home_account_lbl)
+
+        metrics = QGridLayout()
+        metrics.setHorizontalSpacing(8)
+        metrics.setVerticalSpacing(8)
+        self._home_metric_version = self._make_home_metric("VERSIÓN", "1.20.1")
+        self._home_metric_mods = self._make_home_metric("MODS", "+340")
+        self._home_metric_ram = self._make_home_metric("RAM", f"{self._ram_gb} GB")
+        self._home_metric_forge = self._make_home_metric("FORGE", self._forge_short())
+        metrics.addWidget(self._home_metric_version, 0, 0)
+        metrics.addWidget(self._home_metric_mods, 0, 1)
+        metrics.addWidget(self._home_metric_ram, 1, 0)
+        metrics.addWidget(self._home_metric_forge, 1, 1)
+        sp.addLayout(metrics)
+
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background:{T.BORDER}; border:none;")
+        sp.addWidget(line)
+
+        self._home_action_hint = QLabel("El modpack oficial se mantiene actualizado automaticamente.")
+        self._home_action_hint.setWordWrap(True)
+        self._home_action_hint.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
+                                             f" color:{T.MUTED}; line-height:145%;"
+                                             " background:transparent; border:none;")
+        sp.addWidget(self._home_action_hint)
+        sp.addStretch()
+
+        content_row.addWidget(primary, 1)
+        content_row.addWidget(status_panel)
+        hl.addLayout(content_row, 1)
+
         bottom = QWidget()
-        bottom.setFixedHeight(170)
+        bottom.setFixedHeight(152)
         bottom.setStyleSheet(f"background:{T.rgba(T.SURFACE,0.70)};"
                              f" border-top:1px solid {T.BORDER};")
         bl = QVBoxLayout(bottom)
-        bl.setContentsMargins(52, 16, 52, 18)
+        bl.setContentsMargins(34, 14, 34, 16)
         bl.setSpacing(8)
         sr = QHBoxLayout()
         self._st_lbl = QLabel("INICIANDO")
@@ -529,7 +655,232 @@ class MainScreen(QWidget):
 
         ph.addWidget(body)
         ph.addWidget(bottom)
+        self._refresh_account_badge()
         return page
+
+    def _home_panel_qss(self):
+        return f"""
+            QFrame#homePanel {{
+                background:{T.rgba(T.CARD, 0.66)};
+                border:1px solid {T.BORDER};
+                border-radius:8px;
+            }}
+        """
+
+    def _make_home_metric(self, label, value):
+        box = QFrame()
+        box.setObjectName("homeMetric")
+        box.setMinimumHeight(56)
+        box.setStyleSheet(f"""
+            QFrame#homeMetric {{
+                background:{T.rgba(T.SURFACE, 0.72)};
+                border:1px solid {T.BORDER};
+                border-radius:8px;
+            }}
+        """)
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(1)
+        top = QLabel(label)
+        top.setStyleSheet(f"font-family:'{T.FONT}'; font-size:9px; font-weight:900;"
+                          f" color:{T.MUTED}; background:transparent; border:none;")
+        val = QLabel(value)
+        val.setObjectName("value")
+        val.setStyleSheet(f"font-family:'{T.FONT}'; font-size:13px; font-weight:900;"
+                          f" color:{T.TEXT}; background:transparent; border:none;")
+        lay.addWidget(top)
+        lay.addWidget(val)
+        return box
+
+    def _make_home_stat(self, label, value):
+        box = QFrame()
+        box.setObjectName("homeStat")
+        box.setStyleSheet(f"""
+            QFrame#homeStat {{
+                background:{T.rgba(T.SURFACE, 0.72)};
+                border:1px solid {T.BORDER};
+                border-radius:8px;
+            }}
+        """)
+        lay = QVBoxLayout(box)
+        lay.setContentsMargins(14, 10, 14, 10)
+        lay.setSpacing(2)
+        top = QLabel(label)
+        top.setStyleSheet(f"font-family:'{T.FONT}'; font-size:9px; font-weight:900;"
+                          f" color:{T.MUTED}; background:transparent; border:none;")
+        val = QLabel(value)
+        val.setObjectName("value")
+        val.setWordWrap(True)
+        val.setStyleSheet(f"font-family:'{T.FONT}'; font-size:13px; font-weight:700;"
+                          f" color:{T.TEXT}; background:transparent; border:none;")
+        lay.addWidget(top)
+        lay.addWidget(val)
+        return box
+
+    def _split_arrow_qss(self):
+        return f"""
+            QPushButton {{
+                background:{T.ACCENT};
+                color:#ffffff;
+                border:none;
+                border-left:1px solid {T.rgba("#ffffff", 0.35)};
+                border-top-right-radius:10px;
+                border-bottom-right-radius:10px;
+                font-family:'{T.FONT}';
+                font-size:16px;
+                font-weight:900;
+            }}
+            QPushButton:hover {{ background:{T.ACCENT_HI}; }}
+            QPushButton:pressed {{ background:{T.ACCENT_LO}; }}
+        """
+
+    def _utility_btn_qss(self):
+        return f"""
+            QPushButton {{
+                background:{T.rgba(T.CARD_HI, 0.86)};
+                color:{T.TEXT2};
+                border:1px solid {T.BORDER_HI};
+                border-radius:8px;
+                padding:9px 16px;
+                font-family:'{T.FONT}';
+                font-size:12px;
+                font-weight:700;
+            }}
+            QPushButton:hover {{
+                color:{T.TEXT};
+                border-color:{T.rgba(T.ACCENT, 0.45)};
+                background:{T.rgba(T.CARD_HI, 1.0)};
+            }}
+        """
+
+    def _set_metric_value(self, box, value):
+        if not box:
+            return
+        label = box.findChild(QLabel, "value")
+        if label:
+            label.setText(str(value))
+
+    def _forge_short(self):
+        return MODPACK_FORGE_VERSION.replace("1.20.1-", "")
+
+    def _modpack_version_label(self):
+        version = getattr(self, "_current_version", "") or MODPACK_VERSION
+        return f"Modpack v{version}"
+
+    def _target_info(self):
+        target = self._home_target
+        if target == "modpack":
+            return {
+                "title": "ChafaLand Modpack",
+                "profile": self._modpack_version_label(),
+                "version": "Forge 1.20.1",
+                "mods": self._installed_mod_count_label(),
+                "forge": self._forge_short(),
+            }
+        if isinstance(target, tuple) and len(target) == 2:
+            kind, version = target
+            if kind == "installed":
+                return {
+                    "title": version,
+                    "profile": "Forge instalado",
+                    "version": version.split("-forge-", 1)[0],
+                    "mods": "Sin pack",
+                    "forge": version.split("-forge-", 1)[-1] if "-forge-" in version else version,
+                }
+            return {
+                "title": f"Minecraft {version}",
+                "profile": "Vanilla",
+                "version": version,
+                "mods": "Sin mods",
+                "forge": "No aplica",
+            }
+        return {
+            "title": "Version no disponible",
+            "profile": "Sin seleccion",
+            "version": "-",
+            "mods": "-",
+            "forge": "-",
+        }
+
+    def _installed_mod_count_label(self):
+        try:
+            count = checker.install_health()["have_count"]
+            return str(count) if count else "+340"
+        except Exception:
+            return "+340"
+
+    def _modpack_health_status(self):
+        if self._state == self.S_NONE:
+            return "Sin instalar", T.INFO
+        if self._state == self.S_UPDATE:
+            return "Falta actualizar", T.WARN
+        if self._state == self.S_BUSY:
+            return "Procesando archivos", T.INFO
+        if self._state == self.S_ERROR:
+            return "Requiere atencion", T.ERROR
+        try:
+            h = checker.install_health()
+            if h["want_count"] and h["missing_count"]:
+                return f"Faltan {h['missing_count']} mods", T.WARN
+        except Exception:
+            pass
+        return "Mods actualizados", T.OK
+
+    def _last_session_text(self):
+        raw = self._settings.value("game/last_session", "", str)
+        if not raw:
+            return "Nunca"
+        dt = QDateTime.fromString(raw, Qt.ISODate)
+        if not dt.isValid():
+            return "Nunca"
+        secs = max(0, dt.secsTo(QDateTime.currentDateTimeUtc()))
+        if secs < 60:
+            return "Hace un momento"
+        mins = secs // 60
+        if mins < 60:
+            return f"Hace {mins} min"
+        hours = mins // 60
+        if hours < 24:
+            return f"Hace {hours} h"
+        days = hours // 24
+        return f"Hace {days} dias"
+
+    def mark_session_started(self, target="modpack"):
+        self._settings.setValue("game/last_session", QDateTime.currentDateTimeUtc().toString(Qt.ISODate))
+        self._settings.setValue("game/last_target", str(target))
+        self._refresh_home_metrics()
+
+    def _toggle_versions_panel(self):
+        if not hasattr(self, "_home_versions_panel"):
+            return
+        visible = not self._home_versions_panel.isVisible()
+        self._home_versions_panel.setVisible(visible)
+        if hasattr(self, "_versions_toggle"):
+            self._versions_toggle.setText("▲" if visible else "▼")
+
+    def _open_modpack_folder(self):
+        folder = paths.get_minecraft_dir()
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError:
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+
+    def _refresh_home_metrics(self):
+        if not hasattr(self, "_home_metric_version"):
+            return
+        info = self._target_info()
+        if hasattr(self, "_home_title_lbl"):
+            self._home_title_lbl.setText(info["title"])
+        self._set_metric_value(self._home_metric_version, info["version"])
+        self._set_metric_value(self._home_metric_mods, info["mods"])
+        self._set_metric_value(self._home_metric_ram, f"{self._ram_gb} GB")
+        self._set_metric_value(self._home_metric_forge, info["forge"])
+        self._set_metric_value(self._home_stat_profile, info["profile"])
+        self._set_metric_value(self._home_stat_version, info["version"])
+        self._set_metric_value(self._home_stat_mods, info["mods"])
+        self._set_metric_value(self._home_stat_session, self._last_session_text())
+        self._home_selected_lbl.setText(info["title"])
 
     def _make_home_chip(self, text, cb):
         b = QPushButton(text)
@@ -576,7 +927,7 @@ class MainScreen(QWidget):
         self._syncing_combo = True
         self._home_version_combo.clear()
         self._home_version_combo.addItem(
-            f"ChafaLand Modpack · Forge {MODPACK_FORGE_VERSION}",
+            f"ChafaLand Modpack Actual · Forge {MODPACK_FORGE_VERSION}",
             "modpack"
         )
         for forge_id in forge_versions:
@@ -623,10 +974,10 @@ class MainScreen(QWidget):
     def _refresh_home_card_style(self):
         on = self._home_target == "modpack"
         self._home_modpack_card.setStyleSheet(f"""
-            QFrame {{
-                background: {T.CARD_HI if on else T.CARD};
-                border: 1.5px solid {T.ACCENT if on else T.BORDER};
-                border-radius: 14px;
+            QFrame#homeModpackCard {{
+                background: {T.rgba(T.CARD_HI, 0.92) if on else T.rgba(T.CARD, 0.72)};
+                border: 1px solid {T.rgba(T.ACCENT, 0.70) if on else T.BORDER};
+                border-radius: 8px;
             }}
         """)
 
@@ -648,20 +999,81 @@ class MainScreen(QWidget):
         if self._state == self.S_NONE:
             return "INSTALAR", T.INFO, "install"
         if self._state == self.S_UPDATE:
-            return "ACTUALIZAR", T.INFO2, "update"
+            return "FALTA ACTUALIZAR", T.WARN, "update"
         if self._state == self.S_BUSY:
             return "PROCESANDO", T.INFO, "play"
         if self._state == self.S_ERROR:
             return "REINTENTAR", T.ERROR, "install"
-        return "RECOMENDADO", T.ACCENT_HI, "play"
+        return "ACTUAL", T.OK, "play"
 
     def _update_home_state(self):
         if not hasattr(self, "_main_btn"):
             return
 
         badge, color, mode = self._home_modpack_label()
+        health_text, health_color = self._modpack_health_status()
+        if self._home_target != "modpack":
+            badge, color = "SELECCIONADA", T.INFO
+        elif health_color == T.WARN and self._state == self.S_READY:
+            badge, color = "FALTA ACTUALIZAR", T.WARN
         self._home_badge.setText(badge)
         self._home_badge.setStyleSheet(self._badge_qss(color))
+
+        if self._home_target == "modpack":
+            status_text = health_text
+        else:
+            status_text = "Version seleccionada"
+        if hasattr(self, "_home_modpack_status"):
+            self._home_modpack_status.setText(status_text)
+            self._home_modpack_status.setStyleSheet(
+                f"font-family:'{T.FONT}'; font-size:11px; color:{health_color};"
+                " background:transparent;"
+            )
+
+        ready_line = (
+            "Listo para jugar"
+            if self._state == self.S_READY and health_text == "Mods actualizados"
+            else status_text
+        )
+        if hasattr(self, "_home_meta_line"):
+            if self._home_target == "modpack":
+                self._home_meta_line.setText(
+                    f"<span style='color:{T.TEXT2};'>⚒ Forge 1.20.1</span>"
+                    f"<span style='color:{T.MUTED};'>  ·  </span>"
+                    f"<span style='color:{T.TEXT2};'>▣ {self._installed_mod_count_label()} mods</span>"
+                    f"<span style='color:{T.MUTED};'>  ·  </span>"
+                    f"<span style='color:{health_color};'>✓ {ready_line}</span>"
+                )
+            else:
+                info = self._target_info()
+                self._home_meta_line.setText(
+                    f"<span style='color:{T.TEXT2};'>Minecraft {info['version']}</span>"
+                    f"<span style='color:{T.MUTED};'>  ·  </span>"
+                    f"<span style='color:{T.TEXT2};'>{info['mods']}</span>"
+                    f"<span style='color:{T.MUTED};'>  ·  </span>"
+                    f"<span style='color:{T.INFO};'>✓ Version seleccionada</span>"
+                )
+
+        if hasattr(self, "_home_action_hint"):
+            if self._home_target != "modpack":
+                info = self._target_info()
+                hint = f"Estado actual: {info['title']}. Se iniciara esta version sin el modpack."
+            elif self._state == self.S_NONE:
+                hint = "Instala el modpack oficial antes de iniciar Minecraft."
+            elif self._state == self.S_UPDATE:
+                hint = "Hay una actualizacion disponible. Se recomienda actualizar antes de jugar."
+            elif self._state == self.S_BUSY:
+                hint = "El launcher esta preparando los archivos necesarios."
+            elif self._state == self.S_ERROR:
+                hint = "Revisa el log inferior y reintenta la verificacion o instalacion."
+            elif self._account_mode == "premium":
+                hint = "Perfil premium detectado. JUGAR abre el launcher oficial."
+            elif health_color == T.WARN:
+                hint = f"{health_text}. Ejecuta la actualizacion para sincronizar el modpack."
+            else:
+                hint = "Todo actualizado. Puedes iniciar el modpack oficial."
+            self._home_action_hint.setText(hint)
+
         if self._account_mode == "premium" and self._state == self.S_READY:
             self._home_notice.setText("Cuenta premium detectada: JUGAR abre el launcher oficial.")
             self._home_notice.show()
@@ -697,6 +1109,8 @@ class MainScreen(QWidget):
         else:
             self._chk_spin.stop()
         self._refresh_home_card_style()
+        self._refresh_account_badge()
+        self._refresh_home_metrics()
 
     def home_target(self):
         return self._home_target
@@ -830,6 +1244,16 @@ class MainScreen(QWidget):
         self._account_mode = mode or ""
         self._update_home_state()
 
+    def _refresh_account_badge(self):
+        if not hasattr(self, "_home_account_lbl"):
+            return
+        acc = self._account
+        if not acc:
+            self._home_account_lbl.setText("Perfil: no cargado")
+            return
+        mode = "Premium" if getattr(acc, "mode", "") == "premium" else "No premium"
+        self._home_account_lbl.setText(f"Perfil: {acc.username} · {mode}")
+
     def _build_ajustes_page_legacy(self):
         page = QWidget(); page.setStyleSheet("background:transparent;")
         lay = QVBoxLayout(page); lay.setContentsMargins(52, 22, 52, 22); lay.setSpacing(0)
@@ -923,6 +1347,22 @@ class MainScreen(QWidget):
         profile_row.addLayout(form, stretch=1)
         ov.addLayout(profile_row)
 
+        profiles_lab = QLabel("Perfiles guardados")
+        profiles_lab.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; font-weight:700;"
+                                   f" color:{T.TEXT2}; background:transparent; border:none;")
+        ov.addWidget(profiles_lab)
+        profiles_row = QHBoxLayout(); profiles_row.setSpacing(10)
+        self._profiles_combo = QComboBox()
+        self._profiles_combo.setFixedHeight(40)
+        self._profiles_combo.setStyleSheet(self._combo_qss())
+        self._restore_profile_btn = QPushButton("Restaurar")
+        self._restore_profile_btn.setCursor(Qt.PointingHandCursor)
+        self._restore_profile_btn.setStyleSheet(self._ghost_btn_qss())
+        self._restore_profile_btn.clicked.connect(self._restore_selected_profile)
+        profiles_row.addWidget(self._profiles_combo, stretch=1)
+        profiles_row.addWidget(self._restore_profile_btn)
+        ov.addLayout(profiles_row)
+
         btns = QHBoxLayout(); btns.setSpacing(10)
         self._skin_settings_btn = QPushButton("Cambiar skin")
         self._skin_settings_btn.setCursor(Qt.PointingHandCursor)
@@ -976,6 +1416,28 @@ class MainScreen(QWidget):
             }}
         """
 
+    def _combo_qss(self):
+        return f"""
+            QComboBox {{
+                background:{T.SURFACE};
+                border:1px solid {T.BORDER_HI};
+                border-radius:8px;
+                padding:7px 12px;
+                color:{T.TEXT};
+                font-family:'{T.FONT}';
+                font-size:12px;
+            }}
+            QComboBox::drop-down {{ width:30px; border:none; }}
+            QComboBox QAbstractItemView {{
+                background:{T.SURFACE};
+                border:1px solid {T.BORDER_HI};
+                color:{T.TEXT2};
+                selection-background-color:{T.rgba(T.ACCENT, 0.22)};
+                selection-color:{T.TEXT};
+                outline:0;
+            }}
+        """
+
     def _primary_btn_qss(self):
         return f"""
             QPushButton {{
@@ -1009,6 +1471,7 @@ class MainScreen(QWidget):
     def _on_ram_changed(self, value):
         self._ram_gb = int(value)
         self._settings.setValue("game/ram_gb", self._ram_gb)
+        self._refresh_home_metrics()
 
     def ram_gb(self):
         return max(2, min(16, int(self._ram_gb or 6)))
@@ -1016,6 +1479,7 @@ class MainScreen(QWidget):
     def set_account(self, account):
         self._account = account
         self.set_account_mode(getattr(account, "mode", ""))
+        self._refresh_account_badge()
         self._refresh_account_settings()
 
     def _refresh_account_settings(self):
@@ -1031,6 +1495,29 @@ class MainScreen(QWidget):
         self._settings_uuid.setText(f"UUID offline: {acc.uuid}")
         self._pending_skin_path = ""
         self._set_settings_skin(acc.skin_path)
+        self._refresh_profiles()
+
+    def _refresh_profiles(self):
+        if not hasattr(self, "_profiles_combo"):
+            return
+        current_uuid = getattr(self._account, "uuid", "")
+        self._profiles_combo.clear()
+        profiles = accounts.list_profiles()
+        if not profiles:
+            self._profiles_combo.addItem("Sin perfiles guardados", None)
+            self._restore_profile_btn.setEnabled(False)
+            return
+        self._restore_profile_btn.setEnabled(True)
+        for profile in profiles:
+            label = profile.username
+            if profile.uuid == current_uuid:
+                label += "  (actual)"
+            self._profiles_combo.addItem(label, profile)
+        for i in range(self._profiles_combo.count()):
+            profile = self._profiles_combo.itemData(i)
+            if profile and profile.uuid == current_uuid:
+                self._profiles_combo.setCurrentIndex(i)
+                break
 
     def _set_settings_skin(self, path):
         if path and os.path.exists(path):
@@ -1089,12 +1576,32 @@ class MainScreen(QWidget):
                 skin_path = accounts.save_skin(name, self._pending_skin_path)
             except Exception:
                 skin_path = self._pending_skin_path
+        accounts.remember_profile(acc)
         updated = accounts.make_offline(name, skin_path=skin_path)
         accounts.save(updated)
         self._account = updated
         self.account_changed.emit(updated)
         self._refresh_account_settings()
         self.append_log("Perfil no premium guardado")
+
+    def _restore_selected_profile(self):
+        profile = self._profiles_combo.currentData()
+        if not profile:
+            return
+        ans = QMessageBox.question(
+            self,
+            "Restaurar perfil",
+            f"Restaurar el perfil '{profile.username}' con su UUID offline anterior?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        accounts.save(profile)
+        self._account = profile
+        self.account_changed.emit(profile)
+        self._refresh_account_settings()
+        self.append_log(f"Perfil restaurado: {profile.username}")
 
     def _open_lightbox(self, paths, idx):
         self._lightbox.open_at(paths, idx)
@@ -1198,14 +1705,13 @@ class MainScreen(QWidget):
 
             self._chk_spin.stop()
 
-            self._set_st(
-                "LISTO PARA JUGAR",
-                T.ACCENT_HI
-            )
-
-            self._log.append_log(
-                "✅ Todo actualizado. Listo para iniciar."
-            )
+            health_text, health_color = self._modpack_health_status()
+            if health_color == T.WARN:
+                self._set_st("FALTA ACTUALIZAR", T.WARN)
+                self._log.append_log(f"⚠️ {health_text}. Se recomienda actualizar.")
+            else:
+                self._set_st("LISTO PARA JUGAR", T.ACCENT_HI)
+                self._log.append_log("✅ Todo actualizado. Listo para iniciar.")
 
             # Volver la insignia al estilo normal "Modpack v..."
             version = remote_version or getattr(self, "_current_version", "")

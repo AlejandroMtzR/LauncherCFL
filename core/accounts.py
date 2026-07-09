@@ -23,6 +23,7 @@ except Exception:
     os.makedirs(APP_DIR, exist_ok=True)
 
 ACCOUNT_FILE = os.path.join(APP_DIR, "account.json")
+PROFILES_FILE = os.path.join(APP_DIR, "offline_profiles.json")
 SKINS_DIR = os.path.join(APP_DIR, "skins")
 os.makedirs(SKINS_DIR, exist_ok=True)
 
@@ -80,7 +81,46 @@ def make_offline(name: str, skin_path: str = "") -> Account:
 
 
 # ── Persistencia ──────────────────────────────────────────────────────────
+def _profile_data(account: Account) -> dict:
+    data = asdict(account)
+    data["uuid"] = account.uuid or offline_uuid(account.username)
+    return data
+
+
+def list_profiles() -> list[Account]:
+    if not os.path.exists(PROFILES_FILE):
+        return []
+    try:
+        with open(PROFILES_FILE, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        out = []
+        for item in raw if isinstance(raw, list) else []:
+            item.setdefault("token", "0")
+            item.setdefault("refresh_token", "")
+            item.setdefault("skin_path", "")
+            if item.get("mode") == "offline" and is_valid_name(item.get("username", "")):
+                out.append(Account(**item))
+        return out
+    except Exception:
+        return []
+
+
+def remember_profile(account: Account) -> None:
+    if not account or account.mode != "offline" or not is_valid_name(account.username):
+        return
+    profiles = list_profiles()
+    data = _profile_data(account)
+    kept = [
+        p for p in profiles
+        if p.uuid != account.uuid and p.username.lower() != account.username.lower()
+    ]
+    ordered = [Account(**data)] + kept
+    with open(PROFILES_FILE, "w", encoding="utf-8") as f:
+        json.dump([asdict(p) for p in ordered[:12]], f, indent=2)
+
+
 def save(account: Account) -> None:
+    remember_profile(account)
     with open(ACCOUNT_FILE, "w", encoding="utf-8") as f:
         json.dump(asdict(account), f, indent=2)
 
