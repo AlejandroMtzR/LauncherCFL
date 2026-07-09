@@ -562,7 +562,7 @@ class MainScreen(QWidget):
         b.setFixedSize(34, 34)
         b.setCursor(Qt.PointingHandCursor)
         has_url = bool(url)
-        b.setToolTip(tooltip if has_url else f"{tooltip} — configura la URL en config.py")
+        b.setToolTip(tooltip if has_url else f"{tooltip} — Próximamente")
         used_icon = False
         if qta is not None:
             try:
@@ -1644,116 +1644,297 @@ class MainScreen(QWidget):
         lay.addWidget(card); lay.addStretch()
         return page
 
+
+
     # ── Visor ─────────────────────────────────────────────────────
     def _build_ajustes_page(self):
-        page = QWidget(); page.setStyleSheet("background:transparent;")
-        lay = QVBoxLayout(page); lay.setContentsMargins(52, 22, 52, 22); lay.setSpacing(14)
-        title = QLabel("AJUSTES")
-        title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:26px; font-weight:900;"
-                           f" color:{T.TEXT}; letter-spacing:2px;")
-        lay.addWidget(title)
-        sub = QLabel("Configuracion del launcher")
-        sub.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; color:{T.MUTED};")
-        lay.addWidget(sub); lay.addSpacing(6)
+        page = QWidget()
+        page.setStyleSheet("background:transparent;")
 
+        lay = QVBoxLayout(page)
+        lay.setContentsMargins(52, 22, 52, 22)
+        lay.setSpacing(14)
+
+        title = QLabel("AJUSTES")
+        title.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:26px; font-weight:900;"
+            f" color:{T.TEXT}; letter-spacing:2px;"
+        )
+        lay.addWidget(title)
+
+        sub = QLabel("Configuracion del launcher")
+        sub.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:12px; color:{T.MUTED};"
+        )
+        lay.addWidget(sub)
+        lay.addSpacing(6)
+
+        # ── CARD RAM ───────────────────────────────────────────────
         ram_card = QFrame()
         ram_card.setStyleSheet(self._settings_card_qss())
-        rv = QVBoxLayout(ram_card); rv.setContentsMargins(20, 18, 20, 18); rv.setSpacing(10)
+
+        rv = QVBoxLayout(ram_card)
+        rv.setContentsMargins(20, 18, 20, 18)
+        rv.setSpacing(10)
+
         ram_title = QLabel("MEMORIA RAM")
-        ram_title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:13px; font-weight:900;"
-                                f" color:{T.TEXT}; background:transparent; border:none;")
+        ram_title.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:13px; font-weight:900;"
+            f" color:{T.TEXT}; background:transparent; border:none;"
+        )
         rv.addWidget(ram_title)
-        ram_row = QHBoxLayout(); ram_row.setSpacing(12)
+
+        ram_row = QHBoxLayout()
+        ram_row.setSpacing(12)
+
         ram_label = QLabel("RAM para Minecraft")
-        ram_label.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; color:{T.TEXT2};"
-                                " background:transparent; border:none;")
-        self._ram_spin = QSpinBox()
-        self._ram_spin.setRange(2, 16)
-        self._ram_spin.setSuffix(" GB")
-        self._ram_spin.setValue(self._ram_gb)
-        self._ram_spin.setFixedWidth(120)
-        self._ram_spin.setStyleSheet(self._spin_qss())
-        self._ram_spin.valueChanged.connect(self._on_ram_changed)
+        ram_label.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:12px; color:{T.TEXT2};"
+            " background:transparent; border:none;"
+        )
+
+        self._ram_selector = self._make_ram_selector()
+
         ram_row.addWidget(ram_label)
         ram_row.addStretch()
-        ram_row.addWidget(self._ram_spin)
+        ram_row.addWidget(self._ram_selector)
+
         rv.addLayout(ram_row)
         lay.addWidget(ram_card)
 
+        # ── CARD PERFIL NO PREMIUM ─────────────────────────────────
         self._offline_card = QFrame()
         self._offline_card.setStyleSheet(self._settings_card_qss())
-        ov = QVBoxLayout(self._offline_card); ov.setContentsMargins(20, 18, 20, 18); ov.setSpacing(12)
+
+        ov = QVBoxLayout(self._offline_card)
+        ov.setContentsMargins(20, 18, 20, 18)
+        ov.setSpacing(12)
+
         offline_title = QLabel("PERFIL NO PREMIUM")
-        offline_title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:13px; font-weight:900;"
-                                    f" color:{T.TEXT}; background:transparent; border:none;")
+        offline_title.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:13px; font-weight:900;"
+            f" color:{T.TEXT}; background:transparent; border:none;"
+        )
         ov.addWidget(offline_title)
 
-        profile_row = QHBoxLayout(); profile_row.setSpacing(18)
+        profile_row = QHBoxLayout()
+        profile_row.setSpacing(18)
+
         self._settings_skin_preview = QLabel("?")
         self._settings_skin_preview.setAlignment(Qt.AlignCenter)
         self._settings_skin_preview.setFixedSize(86, 86)
-        self._settings_skin_preview.setStyleSheet(f"background:{T.SURFACE}; border:1px solid {T.BORDER_HI};"
-                                                  f" border-radius:10px; color:{T.MUTED};")
+        self._settings_skin_preview.setStyleSheet(
+            f"background:{T.SURFACE}; border:1px solid {T.BORDER_HI};"
+            f" border-radius:10px; color:{T.MUTED};"
+        )
         profile_row.addWidget(self._settings_skin_preview)
 
-        form = QVBoxLayout(); form.setSpacing(8)
+        form = QVBoxLayout()
+        form.setSpacing(8)
+
         name_lab = QLabel("Nombre de jugador")
-        name_lab.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; font-weight:700;"
-                               f" color:{T.TEXT2}; background:transparent; border:none;")
+        name_lab.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:11px; font-weight:700;"
+            f" color:{T.TEXT2}; background:transparent; border:none;"
+        )
+
         self._settings_name = QLineEdit()
         self._settings_name.setMaxLength(16)
         self._settings_name.setStyleSheet(self._input_qss())
+
         self._settings_uuid = QLabel("")
-        self._settings_uuid.setStyleSheet(f"font-family:'{T.FONT_MONO}'; font-size:9px;"
-                                          f" color:{T.MUTED}; background:transparent; border:none;")
+        self._settings_uuid.setStyleSheet(
+            f"font-family:'{T.FONT_MONO}'; font-size:9px;"
+            f" color:{T.MUTED}; background:transparent; border:none;"
+        )
+
         self._settings_skin_lbl = QLabel("Steve por defecto")
-        self._settings_skin_lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px;"
-                                              f" color:{T.MUTED}; background:transparent; border:none;")
+        self._settings_skin_lbl.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:10px;"
+            f" color:{T.MUTED}; background:transparent; border:none;"
+        )
+
         form.addWidget(name_lab)
         form.addWidget(self._settings_name)
         form.addWidget(self._settings_uuid)
         form.addWidget(self._settings_skin_lbl)
+
         profile_row.addLayout(form, stretch=1)
         ov.addLayout(profile_row)
 
         profiles_lab = QLabel("Perfiles guardados")
-        profiles_lab.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; font-weight:700;"
-                                   f" color:{T.TEXT2}; background:transparent; border:none;")
+        profiles_lab.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:11px; font-weight:700;"
+            f" color:{T.TEXT2}; background:transparent; border:none;"
+        )
         ov.addWidget(profiles_lab)
-        profiles_row = QHBoxLayout(); profiles_row.setSpacing(10)
+
+        profiles_row = QHBoxLayout()
+        profiles_row.setSpacing(10)
+
         self._profiles_combo = QComboBox()
         self._profiles_combo.setFixedHeight(40)
         self._profiles_combo.setStyleSheet(self._combo_qss())
+
         self._restore_profile_btn = QPushButton("Restaurar")
         self._restore_profile_btn.setCursor(Qt.PointingHandCursor)
         self._restore_profile_btn.setStyleSheet(self._ghost_btn_qss())
         self._restore_profile_btn.clicked.connect(self._restore_selected_profile)
+
         profiles_row.addWidget(self._profiles_combo, stretch=1)
         profiles_row.addWidget(self._restore_profile_btn)
         ov.addLayout(profiles_row)
 
-        btns = QHBoxLayout(); btns.setSpacing(10)
+        btns = QHBoxLayout()
+        btns.setSpacing(10)
+
         self._skin_settings_btn = QPushButton("Cambiar skin")
         self._skin_settings_btn.setCursor(Qt.PointingHandCursor)
         self._skin_settings_btn.setStyleSheet(self._ghost_btn_qss())
         self._skin_settings_btn.clicked.connect(self._pick_settings_skin)
+
         self._save_profile_btn = QPushButton("Guardar perfil")
         self._save_profile_btn.setCursor(Qt.PointingHandCursor)
         self._save_profile_btn.setStyleSheet(self._primary_btn_qss())
         self._save_profile_btn.clicked.connect(self._save_offline_profile)
+
         btns.addWidget(self._skin_settings_btn)
         btns.addWidget(self._save_profile_btn)
         btns.addStretch()
+
         ov.addLayout(btns)
         lay.addWidget(self._offline_card)
 
+        # ── HINT PREMIUM ────────────────────────────────────────────
         self._premium_hint = QLabel("La skin premium se gestiona desde el launcher oficial.")
-        self._premium_hint.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; color:{T.MUTED};")
+        self._premium_hint.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:12px; color:{T.MUTED};"
+        )
         lay.addWidget(self._premium_hint)
+
         lay.addStretch()
+
         self._refresh_account_settings()
+
         return page
 
+    def _make_ram_selector(self):
+        box = QFrame()
+        box.setObjectName("ramSelector")
+        box.setFixedSize(174, 42)
+        box.setStyleSheet(self._ram_selector_qss())
+
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+
+        self._ram_minus_btn = QPushButton("−")
+        self._ram_minus_btn.setObjectName("ramMinus")
+        self._ram_minus_btn.setFixedSize(42, 42)
+        self._ram_minus_btn.setCursor(Qt.PointingHandCursor)
+        self._ram_minus_btn.clicked.connect(self._ram_dec)
+
+        self._ram_value_lbl = QLabel(f"{self.ram_gb()} GB")
+        self._ram_value_lbl.setObjectName("ramValue")
+        self._ram_value_lbl.setAlignment(Qt.AlignCenter)
+        self._ram_value_lbl.setFixedHeight(42)
+
+        self._ram_plus_btn = QPushButton("+")
+        self._ram_plus_btn.setObjectName("ramPlus")
+        self._ram_plus_btn.setFixedSize(42, 42)
+        self._ram_plus_btn.setCursor(Qt.PointingHandCursor)
+        self._ram_plus_btn.clicked.connect(self._ram_inc)
+
+        h.addWidget(self._ram_minus_btn)
+        h.addWidget(self._ram_value_lbl, stretch=1)
+        h.addWidget(self._ram_plus_btn)
+
+        self._refresh_ram_selector()
+
+        return box
+
+    def _ram_dec(self):
+        self._set_ram_value(self.ram_gb() - 1)
+
+    def _ram_inc(self):
+        self._set_ram_value(self.ram_gb() + 1)
+
+    def _set_ram_value(self, value):
+        value = max(2, min(16, int(value)))
+        self._on_ram_changed(value)
+
+    def _refresh_ram_selector(self):
+        value = self.ram_gb()
+
+        if hasattr(self, "_ram_value_lbl"):
+            self._ram_value_lbl.setText(f"{value} GB")
+
+        if hasattr(self, "_ram_minus_btn"):
+            self._ram_minus_btn.setEnabled(value > 2)
+
+        if hasattr(self, "_ram_plus_btn"):
+            self._ram_plus_btn.setEnabled(value < 16)
+
+    def _ram_selector_qss(self):
+        return f"""
+        QFrame#ramSelector {{
+            background-color: #090E14;
+            border: 1px solid #2A3442;
+            border-radius: 9px;
+        }}
+
+        QFrame#ramSelector:hover {{
+            border: 1px solid #3A4656;
+        }}
+
+        QPushButton#ramMinus,
+        QPushButton#ramPlus {{
+            background-color: #101722;
+            color: {T.TEXT};
+            border: none;
+            font-family: '{T.FONT}';
+            font-size: 17px;
+            font-weight: 900;
+        }}
+
+        QPushButton#ramMinus {{
+            border-top-left-radius: 8px;
+            border-bottom-left-radius: 8px;
+            border-right: 1px solid #2A3442;
+        }}
+
+        QPushButton#ramPlus {{
+            border-top-right-radius: 8px;
+            border-bottom-right-radius: 8px;
+            border-left: 1px solid #2A3442;
+        }}
+
+        QPushButton#ramMinus:hover,
+        QPushButton#ramPlus:hover {{
+            background-color: #FF7A1A;
+            color: #1A1206;
+        }}
+
+        QPushButton#ramMinus:pressed,
+        QPushButton#ramPlus:pressed {{
+            background-color: #D96100;
+        }}
+
+        QPushButton#ramMinus:disabled,
+        QPushButton#ramPlus:disabled {{
+            background-color: #0B111A;
+            color: #45505E;
+        }}
+
+        QLabel#ramValue {{
+            background-color: transparent;
+            color: {T.TEXT};
+            border: none;
+            font-family: '{T.FONT}';
+            font-size: 12px;
+            font-weight: 900;
+        }}
+        """
     def _settings_card_qss(self):
         return f"QFrame {{ background:{T.rgba(T.CARD,0.65)}; border:1px solid {T.BORDER}; border-radius:10px; }}"
 
@@ -1773,16 +1954,67 @@ class MainScreen(QWidget):
 
     def _spin_qss(self):
         return f"""
-            QSpinBox {{
-                background:{T.SURFACE};
-                border:1px solid {T.BORDER_HI};
-                border-radius:8px;
-                padding:8px 10px;
-                color:{T.TEXT};
-                font-family:'{T.FONT}';
-                font-size:13px;
-                font-weight:700;
-            }}
+        QSpinBox {{
+            font-family: '{T.FONT}';
+            font-size: 12px;
+            font-weight: 800;
+            color: {T.TEXT};
+            background-color: #090E14;
+            border: 1px solid #2A3442;
+            border-radius: 8px;
+            padding-left: 12px;
+            padding-right: 42px;
+            min-height: 40px;
+            selection-background-color: #FF7A1A;
+        }}
+
+        QSpinBox:hover {{
+            border: 1px solid #3A4656;
+        }}
+
+        QSpinBox:focus {{
+            border: 1px solid #FF7A1A;
+        }}
+
+        QSpinBox::up-button {{
+            subcontrol-origin: border;
+            subcontrol-position: top right;
+            width: 34px;
+            height: 20px;
+            background-color: #101722;
+            border-left: 1px solid #2A3442;
+            border-top-right-radius: 8px;
+        }}
+
+        QSpinBox::down-button {{
+            subcontrol-origin: border;
+            subcontrol-position: bottom right;
+            width: 34px;
+            height: 20px;
+            background-color: #101722;
+            border-left: 1px solid #2A3442;
+            border-bottom-right-radius: 8px;
+        }}
+
+        QSpinBox::up-button:hover,
+        QSpinBox::down-button:hover {{
+            background-color: #FF7A1A;
+        }}
+
+        QSpinBox::up-button:pressed,
+        QSpinBox::down-button:pressed {{
+            background-color: #D96100;
+        }}
+
+        QSpinBox::up-arrow {{
+            width: 9px;
+            height: 9px;
+        }}
+
+        QSpinBox::down-arrow {{
+            width: 9px;
+            height: 9px;
+        }}
         """
 
     def _combo_qss(self):
@@ -1838,8 +2070,12 @@ class MainScreen(QWidget):
         """
 
     def _on_ram_changed(self, value):
-        self._ram_gb = int(value)
+        self._ram_gb = max(2, min(16, int(value)))
         self._settings.setValue("game/ram_gb", self._ram_gb)
+
+        if hasattr(self, "_ram_value_lbl"):
+            self._refresh_ram_selector()
+
         self._refresh_home_metrics()
 
     def ram_gb(self):

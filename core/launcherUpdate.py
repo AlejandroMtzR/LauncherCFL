@@ -1,16 +1,4 @@
-r"""
-launcherUpdate.py
-Auto-actualización del launcher desde GitHub Releases.
 
-Flujo:
-  1. Lee versión local  (launcherVersion.txt en %APPDATA%\CFLLauncher\)
-  2. Consulta GitHub    (API releases/latest)
-  3. Compara versiones
-  4. Si hay nueva:
-       → descarga el .exe nuevo a %TEMP%
-       → escribe update.bat que reemplaza y reinicia
-       → ejecuta el .bat y cierra el launcher actual
-"""
 
 import os
 import sys
@@ -24,7 +12,7 @@ GITHUB_REPO  = "LauncherCFL"
 EXE_NAME     = "CFL-Launcher.exe"
 
 
-LAUNCHER_VERSION = "4.1.4"
+LAUNCHER_VERSION = "5.1.0"
 
 API_URL      = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest"
 HEADERS      = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
