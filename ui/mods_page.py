@@ -29,15 +29,28 @@ class _CardHeader(QWidget):
         self._expanded = True
         self.setFixedHeight(56); self.setCursor(Qt.PointingHandCursor)
 
+    _ICON_MAP = {
+        "sword": "fa5s.dragon",
+        "globe": "fa5s.globe-americas",
+        "shield": "fa5s.shield-alt",
+        "tech": "fa5s.cube",
+        "pickaxe": "fa5s.hammer",
+        "grid": "fa5s.th-large",
+    }
+
     def set_expanded(self, v): self._expanded = v; self.update()
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton: self.clicked.emit()
 
-        import qtawesome as qta
-
-        for k in sorted(qta._instance().charmap.keys()):
-            if "cube" in k.lower():
-                print(k)
+    def _icon_pixmap(self):
+        # Se genera una sola vez (antes se creaba el ícono en cada repintado).
+        if getattr(self, "_icon_pm", None) is None:
+            name = self._ICON_MAP.get(self._kind, "fa5s.th-large")
+            try:
+                self._icon_pm = qta.icon(name, color=self._color).pixmap(32, 32)
+            except Exception:
+                self._icon_pm = QPixmap()
+        return self._icon_pm
 
     def paintEvent(self, _):
         p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
@@ -48,29 +61,9 @@ class _CardHeader(QWidget):
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(col.red(), col.green(), col.blue(), 70))
         p.drawRoundedRect(0, 0, bs, bs, 14, 14)
-        icon_map = {
-            "sword": "fa5s.dragon",
-            "globe": "fa5s.globe-americas",
-            "shield": "fa5s.shield-alt",
-            "tech": "fa5s.cube",
-            "pickaxe": "fa5s.hammer",
-            "grid": "fa5s.th-large"
-        }
-
-        icon_name = icon_map.get(self._kind, "fa5s.th-large")
-
-        icon = qta.icon(
-            icon_name,
-            color=self._color
-        )
-
-        pm = icon.pixmap(32, 32)
-
-        p.drawPixmap(
-            int(bs * 0.20),
-            int(bs * 0.20),
-            pm
-        )
+        pm = self._icon_pixmap()
+        if not pm.isNull():
+            p.drawPixmap(int((bs - 32) / 2), int((bs - 32) / 2), pm)
 
         badge = "%d MODS" % self._count
         p.setFont(QFont(T.FONT, 11, QFont.Black))
@@ -148,228 +141,136 @@ class _SparkBadge(QWidget):
 
 
 class HeroBanner(QFrame):
-    def __init__(
-        self,
-        image_path,
-        show_text=True,
-        parent=None
-    ):
+    """Banner con imagen de fondo. El escalado de la imagen se cachea por
+    tamaño: antes se reescalaba la foto 1920x1080 en CADA repintado."""
+
+    def __init__(self, image_path, show_text=True, parent=None):
         super().__init__(parent)
 
         self._pix = QPixmap(image_path)
+        self._scaled = None
+        self._scaled_for = None
+        self._font_sizes = None
         self._show_text = show_text
 
-        self.setMinimumHeight(260)
-
-        self.setStyleSheet("""
-            QFrame {
-                background: transparent;
-                border-radius: 18px;
-            }
-        """)
+        self.setMinimumHeight(96)
+        self.setStyleSheet("QFrame { background: transparent; border-radius: 18px; }")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(40, 30, 40, 25)
         root.setSpacing(0)
 
         if self._show_text:
-
             root.addStretch()
 
             self.title = QLabel("MODS")
-            self.title.setStyleSheet(f"""
-                color:white;
-                font-family:'{T.FONT}';
-                font-size:48px;
-                font-weight:900;
-                background:transparent;
-            """)
             root.addWidget(self.title)
 
             self.subtitle = QLabel("DEL MODPACK")
-            self.subtitle.setStyleSheet(f"""
-                color:#ff7b1f;
-                font-family:'{T.FONT}';
-                font-size:24px;
-                font-weight:700;
-                background:transparent;
-            """)
             root.addWidget(self.subtitle)
 
-            self.desc = QLabel(
-                "ChafaLand Modpack Oficial · Minecraft 1.20.1"
-            )
-
-            self.desc.setStyleSheet(f"""
-                color:{T.TEXT2};
-                font-family:'{T.FONT}';
-                font-size:11px;
-                background:transparent;
-            """)
-
+            self.desc = QLabel("ChafaLand Modpack Oficial · Minecraft 1.20.1")
+            self.desc.setStyleSheet(
+                f"color:{T.TEXT2}; font-family:'{T.FONT}'; font-size:11px; background:transparent;")
             root.addWidget(self.desc)
-
             root.addSpacing(14)
 
-            badges = QHBoxLayout()
+            self._badges = QWidget()
+            self._badges.setStyleSheet("background:transparent;")
+            badges = QHBoxLayout(self._badges)
+            badges.setContentsMargins(0, 0, 0, 0)
             badges.setSpacing(12)
-
-            badges.addWidget(
-                self._badge(
-                    "fa5s.cube",
-                    "+350 MODS"
-                )
-            )
-
-            badges.addWidget(
-                self._badge(
-                    "fa5s.folder",
-                    "5 CATEGORÍAS"
-                )
-            )
-
-            badges.addWidget(
-                self._badge(
-                    "fa5s.gamepad",
-                    "1.20.1"
-                )
-            )
-
+            badges.addWidget(self._badge("fa5s.cube", "+340 MODS"))
+            badges.addWidget(self._badge("fa5s.folder", "5 CATEGORÍAS"))
+            badges.addWidget(self._badge("fa5s.gamepad", "1.20.1"))
             badges.addStretch()
-
-            root.addLayout(badges)
+            root.addWidget(self._badges)
+            self._apply_font_sizes(48, 24)
 
     def _badge(self, icon_name, text):
-
         frame = QFrame()
-
+        # Selector por objectName: sin él, el borde se aplicaba también a los
+        # QLabel internos (se veían recuadros dentro del recuadro).
+        frame.setObjectName("heroBadge")
         frame.setStyleSheet("""
-            QFrame{
+            QFrame#heroBadge {
                 background:rgba(10,14,20,180);
                 border:1px solid rgba(255,255,255,25);
                 border-radius:12px;
             }
         """)
-
-        frame.setFixedHeight(36)
+        frame.setFixedHeight(34)
 
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(12, 0, 12, 0)
         lay.setSpacing(8)
 
         icon_lbl = QLabel()
-
-        pm = qta.icon(
-            icon_name,
-            color="#ffffff"
-        ).pixmap(14, 14)
-
-        icon_lbl.setPixmap(pm)
+        icon_lbl.setStyleSheet("background:transparent; border:none;")
+        try:
+            icon_lbl.setPixmap(qta.icon(icon_name, color="#ffffff").pixmap(14, 14))
+        except Exception:
+            pass
 
         txt = QLabel(text)
-
-        txt.setStyleSheet(f"""
-            color:white;
-            font-family:'{T.FONT}';
-            font-size:10px;
-            font-weight:700;
-            background:transparent;
-        """)
-
+        txt.setStyleSheet(f"color:white; font-family:'{T.FONT}'; font-size:10px;"
+                          " font-weight:700; background:transparent; border:none;")
         lay.addWidget(icon_lbl)
         lay.addWidget(txt)
-
         return frame
 
+    def _apply_font_sizes(self, title_size, subtitle_size):
+        if self._font_sizes == (title_size, subtitle_size):
+            return
+        self._font_sizes = (title_size, subtitle_size)
+        self.title.setStyleSheet(
+            f"color:white; font-family:'{T.FONT}'; font-size:{title_size}px;"
+            " font-weight:900; background:transparent;")
+        self.subtitle.setStyleSheet(
+            f"color:#ff7b1f; font-family:'{T.FONT}'; font-size:{subtitle_size}px;"
+            " font-weight:700; background:transparent;")
+
     def resizeEvent(self, event):
-
         if self._show_text:
-
-            w = self.width()
-
-            title_size = max(
-                28,
-                min(54, int(w * 0.05))
+            w, h = self.width(), self.height()
+            compact = h < 200
+            self._apply_font_sizes(
+                max(26, min(48 if not compact else 34, int(w * 0.05))),
+                max(13, min(24 if not compact else 16, int(w * 0.025))),
             )
-
-            subtitle_size = max(
-                14,
-                min(24, int(w * 0.025))
-            )
-
-            self.title.setStyleSheet(f"""
-                color:white;
-                font-family:'{T.FONT}';
-                font-size:{title_size}px;
-                font-weight:900;
-                background:transparent;
-            """)
-
-            self.subtitle.setStyleSheet(f"""
-                color:#ff7b1f;
-                font-family:'{T.FONT}';
-                font-size:{subtitle_size}px;
-                font-weight:700;
-                background:transparent;
-            """)
-
+            self.desc.setVisible(h >= 170)
+            self._badges.setVisible(h >= 215)
         super().resizeEvent(event)
 
-    def paintEvent(self, event):
+    def _scaled_pixmap(self):
+        size = self.size()
+        if self._scaled_for != size:
+            self._scaled_for = size
+            self._scaled = self._pix.scaled(
+                size, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        return self._scaled
 
+    def paintEvent(self, event):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), 12, 12)
+        p.setClipPath(path)
 
         if not self._pix.isNull():
-
-            scaled = self._pix.scaled(
-                self.size(),
-                Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation
-            )
-
+            scaled = self._scaled_pixmap()
             x = (scaled.width() - self.width()) // 2
             y = (scaled.height() - self.height()) // 2
+            p.drawPixmap(0, 0, scaled, x, y, self.width(), self.height())
 
-            p.drawPixmap(
-                0,
-                0,
-                scaled,
-                x,
-                y,
-                self.width(),
-                self.height()
-            )
-
-        g = QLinearGradient(
-            0,
-            0,
-            0,
-            self.height()
-        )
-
-        g.setColorAt(
-            0.0,
-            QColor(0, 0, 0, 15)
-        )
-
-        g.setColorAt(
-            0.5,
-            QColor(0, 0, 0, 60)
-        )
-
-        g.setColorAt(
-            1.0,
-            QColor(10, 14, 20, 220)
-        )
-
-        p.fillRect(
-            self.rect(),
-            g
-        )
+        g = QLinearGradient(0, 0, 0, self.height())
+        g.setColorAt(0.0, QColor(0, 0, 0, 15))
+        g.setColorAt(0.5, QColor(0, 0, 0, 60))
+        g.setColorAt(1.0, QColor(10, 14, 20, 220))
+        p.fillRect(self.rect(), g)
+        p.end()
 
         super().paintEvent(event)
-
 
 
 
@@ -410,14 +311,13 @@ class ModsPage(QWidget):
 
     def _build(self):
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 12, 24, 12);
+        lay.setContentsMargins(24, 12, 24, 12)
         lay.setSpacing(0)
 
-        hero = HeroBanner(resource_path("assets/mods_banner.png"))
-        lay.addWidget(hero)
-        lay.addSpacing(24)
-
-
+        self._hero = HeroBanner(resource_path("assets/mods_banner.png"))
+        self._hero.setFixedHeight(260)
+        lay.addWidget(self._hero)
+        lay.addSpacing(18)
 
         # Pestañas
         tabrow = QHBoxLayout(); tabrow.setSpacing(4); tabrow.setAlignment(Qt.AlignLeft)
@@ -439,6 +339,11 @@ class ModsPage(QWidget):
 
         self._tab_desc.clicked.connect(lambda: self._stack.setCurrentIndex(0))
         self._tab_imgs.clicked.connect(self._on_imgs_tab)
+
+    def resizeEvent(self, e):
+        # El banner cede espacio en ventanas bajas para que la lista se vea.
+        self._hero.setFixedHeight(max(150, min(260, int(self.height() * 0.38))))
+        super().resizeEvent(e)
 
     def _make_tab(self, text):
         b = QPushButton(text)

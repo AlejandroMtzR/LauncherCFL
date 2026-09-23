@@ -73,6 +73,21 @@ def drive_download(file_id, dest):
     return os.path.exists(dest) and os.path.getsize(dest) > 0
 
 
+_IMAGE_MAGIC = (b"\xff\xd8\xff", b"\x89PNG", b"GIF8", b"BM")
+
+
+def is_image_file(path):
+    """True si el archivo empieza como una imagen real (JPG/PNG/GIF/BMP/WEBP)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(12)
+    except OSError:
+        return False
+    if head.startswith(_IMAGE_MAGIC):
+        return True
+    return head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+
+
 class GalleryWorker(QThread):
     """Descarga (con caché) las imágenes de la lista en segundo plano."""
     image_ready  = Signal(int, str)   # índice, ruta local
@@ -92,9 +107,20 @@ class GalleryWorker(QThread):
                 self.image_fail.emit(i); continue
             path = os.path.join(self._dest, "img_%s.jpg" % fid)
             try:
-                if not (os.path.exists(path) and os.path.getsize(path) > 0):
-                    drive_download(fid, path)
-                if os.path.exists(path) and os.path.getsize(path) > 0:
+                # Una página de error de Drive guardada como .jpg quedaba en
+                # caché para siempre ("No disponible" aunque el link se arregle).
+                if os.path.exists(path) and not is_image_file(path):
+                    os.remove(path)
+                if not os.path.exists(path):
+                    tmp = path + ".part"
+                    try:
+                        drive_download(fid, tmp)
+                        if is_image_file(tmp):
+                            os.replace(tmp, path)
+                    finally:
+                        if os.path.exists(tmp):
+                            os.remove(tmp)
+                if os.path.exists(path):
                     self.image_ready.emit(i, path); ok += 1
                 else:
                     self.image_fail.emit(i)
@@ -118,7 +144,12 @@ class Thumb(QWidget):
         self.setFixedSize(178, 110)
         self.setCursor(Qt.PointingHandCursor)
 
-    def set_pixmap(self, pix): self._pix = pix; self._state = "ok"; self.update()
+    def set_pixmap(self, pix):
+        # Se escala una sola vez (al doble para pantallas HiDPI); antes se
+        # escalaba la foto completa en cada repintado/hover.
+        w, h = self.width() * 2, self.height() * 2
+        self._pix = pix.scaled(w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        self._state = "ok"; self.update()
     def set_error(self):       self._state = "error"; self.update()
     def enterEvent(self, e):   self._hover = True;  self.update()
     def leaveEvent(self, e):   self._hover = False; self.update()
@@ -133,9 +164,12 @@ class Thumb(QWidget):
         p.setClipPath(path)
         p.fillRect(0, 0, w, h, QColor(T.CARD))
         if self._state == "ok" and self._pix and not self._pix.isNull():
-            scaled = self._pix.scaled(w, h, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
-            ox = (scaled.width() - w) // 2; oy = (scaled.height() - h) // 2
-            p.drawPixmap(-ox, -oy, scaled)
+            p.setRenderHint(QPainter.SmoothPixmapTransform)
+            src = self._pix
+            ratio = max(w / src.width(), h / src.height())
+            sw, sh = w / ratio, h / ratio
+            p.drawPixmap(QRectF(0, 0, w, h), src,
+                         QRectF((src.width() - sw) / 2, (src.height() - sh) / 2, sw, sh))
             if self._hover:
                 ar, ag, ab = T.ACCENT_RGB
                 p.fillRect(0, 0, w, h, QColor(ar, ag, ab, 38))
@@ -220,7 +254,11 @@ class Lightbox(QWidget):
     def _layout_controls(self):
         w, h = self.width(), self.height(); margin = 70
         if self._paths:
-            px = QPixmap(self._paths[self._idx])
+            path = self._paths[self._idx]
+            if getattr(self, "_loaded_path", None) != path:
+                self._loaded_path = path
+                self._loaded_px = QPixmap(path)   # leer de disco solo al cambiar
+            px = self._loaded_px
             if not px.isNull():
                 px = px.scaled(max(50, w - margin * 2), max(50, h - margin * 2),
                                Qt.KeepAspectRatio, Qt.SmoothTransformation)

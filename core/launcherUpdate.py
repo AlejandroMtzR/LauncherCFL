@@ -9,16 +9,17 @@ import subprocess
 # ── Config ────────────────────────────────────────────────────────
 GITHUB_USER  = "AlejandroMtzR"
 GITHUB_REPO  = "LauncherCFL"
-EXE_NAME     = "CFL-Launcher.exe"
+EXE_NAME     = "CFL-Launcher-real.exe"
 
 
-LAUNCHER_VERSION = "5.1.0"
+LAUNCHER_VERSION = "5.3.6"
 
 API_URL      = f"https://api.github.com/repos/{GITHUB_USER}/{GITHUB_REPO}/releases/latest"
 HEADERS      = {"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"}
 
 APP_DIR           = os.path.join(os.getenv("APPDATA", ""), "CFLLauncher")
 LOCAL_VERSION_FILE = os.path.join(APP_DIR, "launcherVersion.txt")
+PENDING_VERSION_FILE = os.path.join(APP_DIR, "launcherVersion.pending")
 os.makedirs(APP_DIR, exist_ok=True)
 
 
@@ -26,16 +27,86 @@ os.makedirs(APP_DIR, exist_ok=True)
 # 📄 VERSIÓN LOCAL
 
 def get_local_version():
+    """
+    Versión del launcher en ejecución. LAUNCHER_VERSION viaja dentro del .exe;
+    launcherVersion.txt la registra el proceso de update. Se usa la mayor de
+    las dos: un .txt viejo (p. ej. tras instalar el .exe a mano) ya no provoca
+    volver a descargar la misma versión.
+    """
     try:
-        with open(LOCAL_VERSION_FILE) as f:
-            return f.read().strip() or LAUNCHER_VERSION
-    except FileNotFoundError:
-        return LAUNCHER_VERSION
+        with open(LOCAL_VERSION_FILE, encoding="utf-8") as f:
+            saved = f.read().strip()
+    except (OSError, UnicodeDecodeError):
+        saved = ""
+    if saved and _parse_version(saved) > _parse_version(LAUNCHER_VERSION):
+        return saved
+    return LAUNCHER_VERSION
 
 
 def save_local_version(version: str):
     with open(LOCAL_VERSION_FILE, "w") as f:
         f.write(version.strip())
+
+
+def finalize_pending_launcher_update(log=None):
+    """
+    Confirma una actualización pendiente solo cuando el nuevo launcher ya
+    consiguió arrancar Python. Si el bootloader falla antes de llegar aquí,
+    launcherVersion.txt no se marca y se puede reintentar.
+    """
+    try:
+        if not os.path.exists(PENDING_VERSION_FILE):
+            return
+        with open(PENDING_VERSION_FILE, encoding="utf-8") as f:
+            version = f.read().strip()
+        if version:
+            save_local_version(version)
+            if log:
+                log(f"✅ Update del launcher confirmado: v{version}")
+        try:
+            os.remove(PENDING_VERSION_FILE)
+        except OSError:
+            pass
+    except Exception as e:
+        if log:
+            log(f"⚠️ No se pudo confirmar la actualización del launcher: {e}")
+
+
+def _clean_pyinstaller_env():
+    """
+    PyInstaller onefile hereda variables _PYI* hacia procesos hijos. Para un
+    reinicio real del launcher hay que limpiarlas; si no, el nuevo exe puede
+    intentar reutilizar una carpeta _MEI vieja que ya fue eliminada.
+    """
+    env = os.environ.copy()
+    for key in list(env):
+        if key.startswith("_PYI") or key.startswith("PYINSTALLER_"):
+            env.pop(key, None)
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
+def _verify_exe_boots(exe_path: str, log=None):
+    """
+    Prueba rápida del exe descargado. Si falta python311.dll o una dependencia,
+    PyInstaller falla antes de ejecutar main.py y aquí recibimos código != 0.
+    """
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+    try:
+        result = subprocess.run(
+            [exe_path, "--self-test"],
+            env=_clean_pyinstaller_env(),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags,
+            timeout=45,
+        )
+    except Exception as e:
+        raise RuntimeError(f"el exe descargado no pasó la prueba de arranque: {e}")
+    if result.returncode != 0:
+        raise RuntimeError(f"el exe descargado no arrancó correctamente (código {result.returncode})")
+    if log:
+        log("OK: prueba de arranque del launcher nuevo correcta")
 
 
 # VERSIÓN REMOTA (GitHub)
@@ -108,21 +179,27 @@ def check_launcher_update(log=None):
 # DESCARGAR NUEVO .EXE
 
 def download_new_exe(url: str, log=None, progress=None):
-    r"""
-    Descarga el nuevo .exe a %TEMP%\CFL-Launcher-new.exe
-    Retorna la ruta del archivo descargado.
-    """
-    dest = os.path.join(os.getenv("TEMP", APP_DIR), "CFL-Launcher-new.exe")
+
+    updates_dir = os.path.join(APP_DIR, "updates")
+    os.makedirs(updates_dir, exist_ok=True)
+    dest = os.path.join(updates_dir, "CFL-Launcher-new.exe")
 
     if log: log(f"⬇️  Descargando nueva versión del launcher...")
     if progress: progress(0)
 
     try:
         r         = requests.get(url, stream=True, timeout=60)
+        r.raise_for_status()
         total     = int(r.headers.get("content-length", 0))
         total_mb  = total / (1024 * 1024)
         downloaded = 0
         start      = time.time()
+
+        if os.path.exists(dest):
+            try:
+                os.remove(dest)
+            except OSError:
+                pass
 
         with open(dest, "wb") as f:
             for chunk in r.iter_content(1024 * 256):
@@ -131,8 +208,8 @@ def download_new_exe(url: str, log=None, progress=None):
                 f.write(chunk)
                 downloaded += len(chunk)
 
+                pct = int((downloaded / total) * 100) if total > 0 else 0
                 if total > 0 and progress:
-                    pct = int((downloaded / total) * 100)
                     progress(pct)
 
                 if log and total > 0:
@@ -147,6 +224,14 @@ def download_new_exe(url: str, log=None, progress=None):
                         download_new_exe._last_pct = pct
                         log(f"  {pct}% | {mb_dl:.1f}/{total_mb:.1f} MB | {mb_speed:.2f} MB/s | ETA: {m}m {s}s")
 
+        if total > 0 and downloaded != total:
+            raise RuntimeError(f"descarga incompleta: {downloaded}/{total} bytes")
+        with open(dest, "rb") as f:
+            if f.read(2) != b"MZ":
+                raise RuntimeError("el archivo descargado no parece ser un .exe válido")
+
+        _verify_exe_boots(dest, log=log)
+
         if progress: progress(100)
         if log: log(f"✅ Launcher descargado correctamente")
         return dest
@@ -160,10 +245,7 @@ def download_new_exe(url: str, log=None, progress=None):
 # REEMPLAZAR Y REINICIAR
 
 def apply_update(new_exe_path: str, version: str = "", log=None):
-    """
-    Escribe un .bat que espera a que cierre este proceso, reemplaza el .exe
-    (con reintentos), marca la versión SOLO si la copia funcionó, y reinicia.
-    """
+
     current_exe = sys.executable if getattr(sys, "frozen", False) else None
 
     if not current_exe:
@@ -171,7 +253,7 @@ def apply_update(new_exe_path: str, version: str = "", log=None):
         if log: log(f"   Nuevo launcher en: {new_exe_path}")
         return
 
-    bat_path = os.path.join(os.getenv("TEMP", APP_DIR), "cfl_update.bat")
+    bat_path = os.path.join(APP_DIR, "cfl_update.bat")
     # En --onefile hay 2 procesos (bootloader + python); esperar por NOMBRE de
     # imagen los cubre a ambos. Esto evita copiar/relanzar antes de tiempo,
     # que es lo que provoca el error "Failed to load Python DLL" al reabrir.
@@ -207,12 +289,24 @@ rem    antivirus termine de escanearlo ANTES de relanzar. Sin esta pausa,
 rem    el bootloader --onefile falla al descomprimir python311.dll (error 126).
 :copyok
 timeout /t 3 /nobreak >nul
->"{LOCAL_VERSION_FILE}" echo {version}
+>"{PENDING_VERSION_FILE}" echo {version}
+set "PYINSTALLER_RESET_ENVIRONMENT=1"
+set "_PYI_ARCHIVE_FILE="
+set "_PYI_APPLICATION_HOME_DIR="
+set "_PYI_PARENT_PROCESS_LEVEL="
+set "_PYI_SPLASH_IPC="
+set "PYINSTALLER_SUPPRESS_SPLASH_SCREEN="
 start "" "{current_exe}"
 goto cleanup
 
 rem ── 3b) Falló la copia: NO marcar versión, relanzar la actual ──
 :copyfail
+set "PYINSTALLER_RESET_ENVIRONMENT=1"
+set "_PYI_ARCHIVE_FILE="
+set "_PYI_APPLICATION_HOME_DIR="
+set "_PYI_PARENT_PROCESS_LEVEL="
+set "_PYI_SPLASH_IPC="
+set "PYINSTALLER_SUPPRESS_SPLASH_SCREEN="
 start "" "{current_exe}"
 
 :cleanup
@@ -227,6 +321,7 @@ del "%~f0" >nul 2>&1
 
     subprocess.Popen(
         ["cmd", "/c", bat_path],
+        env=_clean_pyinstaller_env(),
         creationflags=subprocess.CREATE_NO_WINDOW,
         close_fds=True
     )

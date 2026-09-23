@@ -56,6 +56,11 @@ def validate_zip(log_callback):
         if sig != b'PK\x03\x04':
             log_callback("❌ Archivo inválido (no es un ZIP real)")
             return False
+        # El índice central va al FINAL del ZIP: si falta, la descarga se cortó.
+        import zipfile
+        if not zipfile.is_zipfile(ZIP_NAME):
+            log_callback("❌ ZIP incompleto (la descarga se cortó)")
+            return False
         log_callback("✅ Archivo ZIP validado")
         return True
     except Exception as e:
@@ -225,6 +230,14 @@ def download_modpack(progress_callback, log_callback, link_url):
                         progress_callback(fake)
                         log_callback(f"  {mb_downloaded:,.1f} MB | {mb_speed:.2f} MB/s")
                         last_log_time = now
+
+        # Un corte de red deja un ZIP truncado que igual empieza con "PK":
+        # compararlo con el tamaño anunciado evita instalarlo a medias.
+        if total > 0 and downloaded < total:
+            raise Exception(
+                f"Descarga incompleta ({downloaded / (1024 * 1024):,.1f} de "
+                f"{total_mb:,.1f} MB)"
+            )
 
         if not validate_zip(log_callback):
             raise Exception("El archivo descargado está corrupto o incompleto")

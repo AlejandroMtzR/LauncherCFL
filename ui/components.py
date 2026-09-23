@@ -37,6 +37,36 @@ def draw_icon(p, kind, x, y, s, color):
             for iy in range(2):
                 p.drawRoundedRect(QRectF(X(0) + o + ix * (g + gap), Y(0) + o + iy * (g + gap), g, g), g * 0.28, g * 0.28)
 
+    elif kind == "cube":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        top = QPointF(X(0.5), Y(0.08))
+        right = QPointF(X(0.86), Y(0.29))
+        center = QPointF(X(0.5), Y(0.50))
+        left = QPointF(X(0.14), Y(0.29))
+        bottom = QPointF(X(0.5), Y(0.91))
+        p.drawPolygon(QPolygonF([top, right, center, left]))
+        p.drawPolygon(QPolygonF([left, center, bottom, QPointF(X(0.14), Y(0.69))]))
+        p.drawPolygon(QPolygonF([right, QPointF(X(0.86), Y(0.69)), bottom, center]))
+        p.drawLine(center, bottom)
+
+    elif kind == "puzzle":
+        p.setPen(Qt.NoPen); p.setBrush(col)
+        path = QPainterPath()
+        path.moveTo(X(0.20), Y(0.20))
+        path.lineTo(X(0.40), Y(0.20))
+        path.cubicTo(X(0.39), Y(0.08), X(0.61), Y(0.08), X(0.60), Y(0.20))
+        path.lineTo(X(0.80), Y(0.20))
+        path.lineTo(X(0.80), Y(0.40))
+        path.cubicTo(X(0.92), Y(0.39), X(0.92), Y(0.61), X(0.80), Y(0.60))
+        path.lineTo(X(0.80), Y(0.80))
+        path.lineTo(X(0.58), Y(0.80))
+        path.cubicTo(X(0.59), Y(0.68), X(0.41), Y(0.68), X(0.42), Y(0.80))
+        path.lineTo(X(0.20), Y(0.80))
+        path.lineTo(X(0.20), Y(0.58))
+        path.cubicTo(X(0.08), Y(0.59), X(0.08), Y(0.41), X(0.20), Y(0.42))
+        path.closeSubpath()
+        p.drawPath(path)
+
     elif kind == "gear":
         p.setPen(pen); p.setBrush(Qt.NoBrush)
         cx, cy = X(0.5), Y(0.5); rO = s * 0.32; rI = s * 0.21
@@ -119,7 +149,161 @@ def draw_icon(p, kind, x, y, s, color):
         path.closeSubpath()
         p.drawPath(path)
 
+    elif kind == "check-circle":
+        pen.setWidthF(max(2.0, s * 0.10))
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        cx, cy = X(0.5), Y(0.5)
+        p.drawEllipse(QPointF(cx, cy), s * 0.36, s * 0.36)
+        p.drawLine(QPointF(X(0.31), Y(0.51)), QPointF(X(0.45), Y(0.65)))
+        p.drawLine(QPointF(X(0.45), Y(0.65)), QPointF(X(0.72), Y(0.36)))
+
+    elif kind == "warning":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        p.drawPolygon(QPolygonF([
+            QPointF(X(0.50), Y(0.12)),
+            QPointF(X(0.88), Y(0.82)),
+            QPointF(X(0.12), Y(0.82)),
+        ]))
+        p.drawLine(QPointF(X(0.50), Y(0.34)), QPointF(X(0.50), Y(0.57)))
+        p.drawPoint(QPointF(X(0.50), Y(0.69)))
+
+    elif kind == "download":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(X(0.50), Y(0.13)), QPointF(X(0.50), Y(0.62)))
+        p.drawLine(QPointF(X(0.30), Y(0.43)), QPointF(X(0.50), Y(0.63)))
+        p.drawLine(QPointF(X(0.70), Y(0.43)), QPointF(X(0.50), Y(0.63)))
+        p.drawLine(QPointF(X(0.18), Y(0.78)), QPointF(X(0.82), Y(0.78)))
+        p.drawLine(QPointF(X(0.18), Y(0.66)), QPointF(X(0.18), Y(0.78)))
+        p.drawLine(QPointF(X(0.82), Y(0.66)), QPointF(X(0.82), Y(0.78)))
+
+    elif kind == "file":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        path = QPainterPath()
+        path.moveTo(X(0.22), Y(0.12))
+        path.lineTo(X(0.61), Y(0.12))
+        path.lineTo(X(0.80), Y(0.31))
+        path.lineTo(X(0.80), Y(0.88))
+        path.lineTo(X(0.22), Y(0.88))
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawLine(QPointF(X(0.61), Y(0.12)), QPointF(X(0.61), Y(0.31)))
+        p.drawLine(QPointF(X(0.61), Y(0.31)), QPointF(X(0.80), Y(0.31)))
+        p.drawLine(QPointF(X(0.34), Y(0.49)), QPointF(X(0.68), Y(0.49)))
+        p.drawLine(QPointF(X(0.34), Y(0.64)), QPointF(X(0.62), Y(0.64)))
+
+    elif kind == "monitor":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        p.drawRoundedRect(QRectF(X(0.13), Y(0.20), s * 0.74, s * 0.49), s * 0.05, s * 0.05)
+        p.drawLine(QPointF(X(0.50), Y(0.69)), QPointF(X(0.50), Y(0.82)))
+        p.drawLine(QPointF(X(0.33), Y(0.84)), QPointF(X(0.67), Y(0.84)))
+
+    elif kind == "folder":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        path = QPainterPath()
+        path.moveTo(X(0.12), Y(0.27))
+        path.lineTo(X(0.39), Y(0.27))
+        path.lineTo(X(0.47), Y(0.38))
+        path.lineTo(X(0.88), Y(0.38))
+        path.lineTo(X(0.88), Y(0.80))
+        path.lineTo(X(0.12), Y(0.80))
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawLine(QPointF(X(0.12), Y(0.38)), QPointF(X(0.88), Y(0.38)))
+
+    elif kind == "java":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(X(0.34), Y(0.14)), QPointF(X(0.27), Y(0.27)))
+        p.drawLine(QPointF(X(0.51), Y(0.12)), QPointF(X(0.44), Y(0.28)))
+        p.drawLine(QPointF(X(0.67), Y(0.15)), QPointF(X(0.60), Y(0.28)))
+        p.drawRoundedRect(QRectF(X(0.22), Y(0.43), s * 0.48, s * 0.25), s * 0.05, s * 0.05)
+        path = QPainterPath()
+        path.moveTo(X(0.70), Y(0.48))
+        path.cubicTo(X(0.90), Y(0.46), X(0.90), Y(0.66), X(0.70), Y(0.63))
+        p.drawPath(path)
+        p.drawLine(QPointF(X(0.18), Y(0.78)), QPointF(X(0.78), Y(0.78)))
+
+    elif kind == "clock":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        cx, cy = X(0.5), Y(0.5)
+        p.drawEllipse(QPointF(cx, cy), s * 0.35, s * 0.35)
+        p.drawLine(QPointF(cx, cy), QPointF(X(0.50), Y(0.29)))
+        p.drawLine(QPointF(cx, cy), QPointF(X(0.66), Y(0.58)))
+
+    elif kind == "layers":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        p.drawPolygon(QPolygonF([
+            QPointF(X(0.50), Y(0.12)),
+            QPointF(X(0.84), Y(0.30)),
+            QPointF(X(0.50), Y(0.48)),
+            QPointF(X(0.16), Y(0.30)),
+        ]))
+        p.drawPolyline(QPolygonF([QPointF(X(0.18), Y(0.47)), QPointF(X(0.50), Y(0.64)), QPointF(X(0.82), Y(0.47))]))
+        p.drawPolyline(QPolygonF([QPointF(X(0.18), Y(0.63)), QPointF(X(0.50), Y(0.80)), QPointF(X(0.82), Y(0.63))]))
+
+    elif kind == "anvil":
+        p.setPen(Qt.NoPen); p.setBrush(col)
+        p.drawPolygon(QPolygonF([
+            QPointF(X(0.12), Y(0.32)),
+            QPointF(X(0.75), Y(0.32)),
+            QPointF(X(0.91), Y(0.42)),
+            QPointF(X(0.72), Y(0.52)),
+            QPointF(X(0.58), Y(0.52)),
+            QPointF(X(0.58), Y(0.64)),
+            QPointF(X(0.72), Y(0.64)),
+            QPointF(X(0.72), Y(0.77)),
+            QPointF(X(0.24), Y(0.77)),
+            QPointF(X(0.24), Y(0.64)),
+            QPointF(X(0.39), Y(0.64)),
+            QPointF(X(0.39), Y(0.52)),
+            QPointF(X(0.18), Y(0.52)),
+        ]))
+
+    elif kind == "dots":
+        p.setPen(Qt.NoPen); p.setBrush(col)
+        for fx in (0.28, 0.50, 0.72):
+            p.drawEllipse(QPointF(X(fx), Y(0.5)), s * 0.06, s * 0.06)
+
+    elif kind == "chevron-down":
+        p.setPen(pen); p.setBrush(Qt.NoBrush)
+        p.drawLine(QPointF(X(0.22), Y(0.38)), QPointF(X(0.50), Y(0.66)))
+        p.drawLine(QPointF(X(0.78), Y(0.38)), QPointF(X(0.50), Y(0.66)))
+
     p.restore()
+
+
+def icon_pixmap(kind, size=18, color=None):
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    draw_icon(p, kind, 1, 1, size - 2, color or T.MUTED)
+    p.end()
+    return pm
+
+
+def make_icon(kind, size=18, color=None):
+    return QIcon(icon_pixmap(kind, size, color))
+
+
+class IconLabel(QWidget):
+    def __init__(self, kind, size=18, color=None, parent=None):
+        super().__init__(parent)
+        self._kind = kind
+        self._size = size
+        self._color = color or T.MUTED
+        self.setFixedSize(size, size)
+
+    def setIcon(self, kind=None, color=None):
+        if kind is not None:
+            self._kind = kind
+        if color is not None:
+            self._color = color
+        self.update()
+
+    def paintEvent(self, _):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        draw_icon(p, self._kind, 1, 1, self._size - 2, self._color)
 
 
 
@@ -136,7 +320,15 @@ class Spinner(QWidget):
         self._t.timeout.connect(self._tick)
         self.hide()
 
-    def start(self): self._t.start(18); self.show()
+    def show(self):
+        if self.parentWidget() is None:
+            return
+        super().show()
+
+    def start(self):
+        self._t.start(18)
+        self.show()
+
     def stop(self):  self._t.stop(); self.hide()
 
     def _tick(self):
@@ -163,10 +355,25 @@ class GlowBar(QWidget):
         self.setFixedHeight(height)
         self._val  = 0
         self._anim = 0.0
-        t = QTimer(self); t.timeout.connect(self._tick); t.start(40)
+        # El brillo solo se anima mientras hay progreso visible; antes el
+        # timer repintaba 25 veces/s siempre, aunque la barra estuviera oculta.
+        self._timer = QTimer(self); self._timer.timeout.connect(self._tick)
 
     def setValue(self, v):
-        self._val = max(0, min(100, v)); self.update()
+        self._val = max(0, min(100, int(v))); self._sync_timer(); self.update()
+
+    def _sync_timer(self):
+        animate = self.isVisible() and 0 < self._val < 100
+        if animate and not self._timer.isActive():
+            self._timer.start(40)
+        elif not animate and self._timer.isActive():
+            self._timer.stop()
+
+    def showEvent(self, e):
+        super().showEvent(e); self._sync_timer()
+
+    def hideEvent(self, e):
+        super().hideEvent(e); self._sync_timer()
 
     def _tick(self):
         self._anim = (self._anim + 0.025) % 1.0
@@ -220,74 +427,136 @@ class LogBox(QTextEdit):
         elif "────" in text:                                                  c = T.DIM
         elif "|" in text and ("MB" in text or "%" in text):                  c = T.TEXT2
         else:                                                                 c = T.MUTED
+        bar = self.verticalScrollBar()
+        # Solo seguir al final si el usuario no subió a leer algo anterior.
+        at_bottom = bar.value() >= bar.maximum() - 4
         self.append(
             f'<span style="color:{c};font-family:{T.FONT_MONO},Consolas;font-size:10pt">'
             f'&gt; {t}</span>'
         )
-        self.verticalScrollBar().setValue(self.verticalScrollBar().maximum())
+        if at_bottom:
+            bar.setValue(bar.maximum())
 
 
 
 #   PLAY BUTTON
 
 class PlayBtn(QPushButton):
+    # Paletas por modo: (base, borde_top_claro, base_oscuro)
+    _PALETTE = {
+        "play":    ("#f97316", "#fb923c", "#ea580c"),
+        "install": ("#0ea5e9", "#38bdf8", "#0284c7"),
+        "update":  ("#06b6d4", "#22d3ee", "#0891b2"),
+    }
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedSize(190, 52)
         self.setFlat(True)
         self.setCursor(Qt.PointingHandCursor)
         self._hov = False; self._prs = False; self._ena = True
-        self._pulse = 0.0; self._mode = "play"
-        t = QTimer(self); t.timeout.connect(self._tick); t.start(40)
+        self._mode = "play"
+        self._round = "both"   # "both" | "left" | "right" (para split-button)
 
     def setMode(self, mode): self._mode = mode; self.update()
-    def _tick(self):
-        self._pulse = (self._pulse + 0.03) % (2 * math.pi); self.update()
+    def setRoundSide(self, side): self._round = side; self.update()
     def enterEvent(self, e): self._hov = True;  self.update()
     def leaveEvent(self, e): self._hov = False; self.update()
     def mousePressEvent(self, e):  self._prs = True;  self.update(); super().mousePressEvent(e)
     def mouseReleaseEvent(self, e): self._prs = False; self.update(); super().mouseReleaseEvent(e)
     def setEnabled(self, v): self._ena = v; super().setEnabled(v); self.update()
 
-    def paintEvent(self, _):
-        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
-        w, h, r = self.width(), self.height(), 10
-        if not self._ena:
-            p.setPen(Qt.NoPen); p.setBrush(QColor(T.CARD))
-            p.drawRoundedRect(0, 0, w, h, r, r)
-            p.setPen(QColor(T.DIM)); p.setFont(QFont(T.FONT, 11, QFont.Bold))
-            p.drawText(QRect(0, 0, w, h), Qt.AlignCenter, self.text())
-            return
-        pa = int(14 + 10 * math.sin(self._pulse))
-        GLOW = {"play": T.ACCENT_RGB, "install": (56, 189, 248), "update": (6, 182, 212)}.get(self._mode, T.ACCENT_RGB)
-        for i in range(6, 0, -1):
-            p.setBrush(QColor(*GLOW, max(0, pa - i * 2))); p.setPen(Qt.NoPen)
-            p.drawRoundedRect(-i, -i, w + i * 2, h + i * 2, r + i, r + i)
-        g = QLinearGradient(0, 0, w, 0)
-        if self._mode == "install":
-            c0, c1 = ("#0284c7", "#0369a1") if self._prs else ("#0ea5e9", "#0284c7")
-        elif self._mode == "update":
-            c0, c1 = ("#0891b2", "#0e7490") if self._prs else ("#06b6d4", "#0891b2")
-        else:
-            if self._prs:   c0, c1 = T.ACCENT_LO, "#9a3412"
-            elif self._hov: c0, c1 = T.ACCENT, "#ea580c"
-            else:           c0, c1 = "#ea580c", T.ACCENT_LO
-        g.setColorAt(0, QColor(c0)); g.setColorAt(1, QColor(c1))
-        p.setBrush(g); p.setPen(Qt.NoPen); p.drawRoundedRect(0, 0, w, h, r, r)
-        hi = QLinearGradient(0, 0, 0, h)
-        hi.setColorAt(0, QColor(255, 255, 255, 45)); hi.setColorAt(1, QColor(255, 255, 255, 0))
-        p.setBrush(hi); p.drawRoundedRect(0, 0, w, h // 2 + 1, r, r)
-        p.setPen(QColor("#ffffff"))
-
-        font = QFont(T.FONT, 11)
-        font.setBold(True)
-        font.setLetterSpacing(
-            QFont.AbsoluteSpacing,
-            1.2
+    def _shift(self, hex_color, amount):
+        """Aclara (+) u oscurece (-) un color hex."""
+        c = QColor(hex_color)
+        f = 1.0 + amount / 100.0
+        return QColor(
+            max(0, min(255, int(c.red()   * f))),
+            max(0, min(255, int(c.green() * f))),
+            max(0, min(255, int(c.blue()  * f))),
         )
 
+    def _shape_path(self, w, h, r):
+        """Rectángulo redondeado con esquinas selectivas según self._round."""
+        rl = r if self._round in ("both", "left") else 0
+        rr = r if self._round in ("both", "right") else 0
+        path = QPainterPath()
+        path.moveTo(rl, 0)
+        path.lineTo(w - rr, 0)
+        if rr: path.quadTo(w, 0, w, rr)
+        else:  path.lineTo(w, 0)
+        path.lineTo(w, h - rr)
+        if rr: path.quadTo(w, h, w - rr, h)
+        else:  path.lineTo(w, h)
+        path.lineTo(rl, h)
+        if rl: path.quadTo(0, h, 0, h - rl)
+        else:  path.lineTo(0, h)
+        path.lineTo(0, rl)
+        if rl: path.quadTo(0, 0, rl, 0)
+        else:  path.lineTo(0, 0)
+        path.closeSubpath()
+        return path
+
+    def paintEvent(self, _):
+        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
+        w, h, r = self.width(), self.height(), 8
+        label = self.text()
+        path = self._shape_path(w, h, r)
+
+        # ── Deshabilitado / "EN EJECUCIÓN" ────────────────────────
+        if not self._ena:
+            p.setPen(Qt.NoPen); p.setBrush(QColor(T.CARD_HI)); p.drawPath(path)
+            pen = QPen(QColor(T.BORDER)); p.setPen(pen); p.setBrush(Qt.NoBrush); p.drawPath(path)
+            font = QFont(T.FONT, 10); font.setBold(True)
+            font.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
+            p.setFont(font); p.setPen(QColor(T.MUTED))
+            p.drawText(QRectF(0, 0, w, h), Qt.AlignCenter, label)
+            return
+
+        base, light, dark = self._PALETTE.get(self._mode, self._PALETTE["play"])
+
+        # Estado: hover aclara, pressed oscurece (mismo esquema que la flecha)
+        if self._prs:
+            top, bot = self._shift(base, -12), self._shift(dark, -12)
+        elif self._hov:
+            top, bot = QColor(light), QColor(base)
+        else:
+            top, bot = QColor(base), QColor(dark)
+
+        # Relleno plano con gradiente vertical sutil (sin glow, sin glossy)
+        g = QLinearGradient(0, 0, 0, h)
+        g.setColorAt(0.0, top); g.setColorAt(1.0, bot)
+        p.setBrush(g); p.setPen(Qt.NoPen); p.drawPath(path)
+
+        # Línea superior 1px levemente clara: relieve limpio
+        p.setPen(QColor(255, 255, 255, 28)); p.setBrush(Qt.NoBrush)
+        p.drawLine(int(r * 0.7), 1, int(w - r * 0.7), 1)
+
+        # ── Texto (+ triángulo de play solo en modo "play") ───────
+        font = QFont(T.FONT, 11); font.setBold(True)
+        font.setLetterSpacing(QFont.AbsoluteSpacing, 1.0)
         p.setFont(font)
-        p.drawText(QRect(0, 0, w, h), Qt.AlignCenter, self.text())
+        fm = p.fontMetrics()
+        tw = fm.horizontalAdvance(label)
+
+        show_icon = (self._mode == "play")
+        icon_w, gap = (13, 11) if show_icon else (0, 0)
+        total = icon_w + gap + tw
+        x0 = (w - total) / 2.0
+        cy = h / 2.0
+
+        if show_icon:
+            p.setPen(Qt.NoPen); p.setBrush(QColor("#ffffff"))
+            tri = QPolygonF([
+                QPointF(x0, cy - 7),
+                QPointF(x0, cy + 7),
+                QPointF(x0 + icon_w, cy),
+            ])
+            p.drawPolygon(tri)
+
+        p.setPen(QColor("#ffffff"))
+        p.drawText(QRectF(x0 + icon_w + gap, 0, tw + 4, h),
+                   Qt.AlignVCenter | Qt.AlignLeft, label)
 
 
 
@@ -332,8 +601,10 @@ class WinBtn(QWidget):
         self._hover = False; self._press = False
         self.setCursor(Qt.PointingHandCursor)
 
+    def setSymbol(self, symbol): self._sym = symbol; self.update()
     def enterEvent(self, e): self._hover = True;  self.update()
     def leaveEvent(self, e): self._hover = False; self._press = False; self.update()
+    def mouseDoubleClickEvent(self, e): e.accept()   # no maximizar al doble clic
     def mousePressEvent(self, e):
         if e.button() == Qt.LeftButton: self._press = True; self.update()
     def mouseReleaseEvent(self, e):
@@ -390,34 +661,12 @@ class NavItem(QWidget):
 #   BACKGROUND animado (gris/azul)
 
 class BgPainter(QWidget):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._t = 0.0
-        t = QTimer(self); t.timeout.connect(self._tick); t.start(55)
-
-    def _tick(self):
-        self._t += 0.008; self.update()
-
+    # Fondo estático. Antes un timer lo repintaba 18 veces por segundo (sin
+    # nada animado), lo que obligaba a redibujar TODA la ventana — banners
+    # incluidos — sin parar y gastaba CPU/GPU en segundo plano.
     def paintEvent(self, _):
-        p = QPainter(self); p.setRenderHint(QPainter.Antialiasing)
-        w, h = self.width(), self.height()
-        p.fillRect(0, 0, w, h, QColor(T.BG))
-        orbs = [
-
-        ]
-        for bx, by, br, ax, ay, col, sp in orbs:
-            ox = int(bx * w + math.sin(self._t * sp) * ax)
-            oy = int(by * h + math.cos(self._t * sp * 0.75) * ay)
-            c = QColor(col)
-            g = QRadialGradient(ox, oy, br)
-            g.setColorAt(0, QColor(c.red(), c.green(), c.blue(), 110))
-            g.setColorAt(1, QColor(c.red(), c.green(), c.blue(), 0))
-            p.setBrush(g); p.setPen(Qt.NoPen)
-            p.drawEllipse(ox - br, oy - br, br * 2, br * 2)
-        p.setPen(QColor(255, 255, 255, 3))
-        step = 42
-        #for x in range(0, w, step): p.drawLine(x, 0, x, h)
-        #for y in range(0, h, step): p.drawLine(0, y, w, y)
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(T.BG))
 
 
 

@@ -3,6 +3,7 @@ import shutil
 import zipfile
 from config import PACK_FILE, ZIP_NAME, INSTALLED_FILE
 from core.paths import get_minecraft_dir
+from core.checker import read_text_lines
 
 
 # =========================
@@ -12,7 +13,7 @@ def is_first_install():
     return not os.path.exists(INSTALLED_FILE)
 
 def mark_installed():
-    with open(INSTALLED_FILE, "w") as f:
+    with open(INSTALLED_FILE, "w", encoding="utf-8") as f:
         f.write("installed")
 
 
@@ -22,12 +23,15 @@ def mark_installed():
 def load_old_pack():
     if not os.path.exists(PACK_FILE):
         return set()
-    with open(PACK_FILE, "r") as f:
-        return set(f.read().splitlines())
+    try:
+        return set(read_text_lines(PACK_FILE))
+    except OSError:
+        return set()
 
 def save_pack(mods):
-    with open(PACK_FILE, "w") as f:
-        for m in mods:
+    # Siempre UTF-8: checker.py lo lee así (antes se escribía en cp1252).
+    with open(PACK_FILE, "w", encoding="utf-8") as f:
+        for m in sorted(mods):
             f.write(m + "\n")
 
 
@@ -39,6 +43,18 @@ def find_minecraft_folder(base_path):
         if ".minecraft" in dirs:
             return os.path.join(root, ".minecraft")
     return None
+
+def _copy_with_retry(src, dst, attempts=3):
+    """Copia reintentando: el antivirus suele bloquear un archivo un instante."""
+    import time
+    for attempt in range(attempts):
+        try:
+            shutil.copy2(src, dst)
+            return True
+        except PermissionError:
+            if attempt + 1 < attempts:
+                time.sleep(0.5)
+    return False
 
 def find_mods_folder(base_path):
     for root, dirs, _ in os.walk(base_path):
@@ -109,11 +125,12 @@ def install_modpack(log, progress):
             for name in filenames:
                 files.append(os.path.join(root, name))
 
-        total = len(files)
+        total = max(len(files), 1)
         last_percent = -1
         start_time = time.time()
+        failed = []
 
-        log(f"📁 {total} archivos a copiar...")
+        log(f"📁 {len(files)} archivos a copiar...")
 
         for i, file in enumerate(files, 1):
             relative   = os.path.relpath(file, src_mc)
@@ -125,7 +142,9 @@ def install_modpack(log, progress):
 
             dst = os.path.join(mc_path, relative)
             os.makedirs(os.path.dirname(dst), exist_ok=True)
-            shutil.copy2(file, dst)  # copy2 preserva metadata
+            if not _copy_with_retry(file, dst):   # copy2 preserva metadata
+                failed.append(relative)
+                log(f"⚠️ No se pudo copiar (en uso): {relative}")
 
             # Progreso: extracción fue 0-30%, copia es 30-100%
             percent = 30 + int((i / total) * 70)
@@ -140,6 +159,14 @@ def install_modpack(log, progress):
                 mins, secs = int(remaining // 60), int(remaining % 60)
                 eta = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
                 log(f"  {percent}% | {i}/{total} archivos | ETA: {eta}")
+
+        if failed:
+            shutil.rmtree(temp, ignore_errors=True)
+            raise Exception(
+                f"{len(failed)} archivo(s) no se pudieron copiar porque están en uso "
+                "(¿Minecraft o el antivirus los tiene abiertos?). Cierra el juego "
+                "e inténtalo de nuevo."
+            )
 
         mods_folder = os.path.join(src_mc, "mods")
         if os.path.exists(mods_folder):

@@ -40,9 +40,9 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    # Debe coincidir EXACTO con EXE_NAME en core/launcherUpdate.py
-    # (ahí está puesto "CFL-Launcher.exe") para que el auto-update
-    # encuentre el asset correcto en el release de GitHub.
+    # El ejecutable instalado conserva este nombre. Para releases puente,
+    # core/launcherUpdate.py puede descargar el asset "CFL-Launcher-real.exe"
+    # y copiarlo sobre este archivo.
     name='CFL-Launcher',
     debug=False,
     bootloader_ignore_signals=False,

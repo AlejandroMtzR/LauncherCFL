@@ -4,6 +4,7 @@ import ctypes
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QIcon
 from ui.main_window import MainWindow
+from core.launcherUpdate import finalize_pending_launcher_update
 
 
 
@@ -16,7 +17,14 @@ def recurso(path):
     """
     if hasattr(sys, '_MEIPASS'):
         return os.path.join(sys._MEIPASS, path)
-    return os.path.join(os.path.abspath("."), path)
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), path)
+
+
+if "--self-test" in sys.argv:
+    sys.exit(0)
+
+
+finalize_pending_launcher_update()
 
 
 
@@ -63,4 +71,9 @@ app.setWindowIcon(QIcon(icon_path))
 window = MainWindow(resource_fn=recurso)
 window.show()
 
-sys.exit(app.exec())
+code = app.exec()
+# Salida inmediata: si el usuario cierra con una descarga/carga en segundo
+# plano, dejar que Python destruya esos QThread en marcha provoca el error
+# "QThread: Destroyed while thread is still running" (cierre abrupto).
+# Los ajustes ya se guardaron con sync() en closeEvent.
+os._exit(code)

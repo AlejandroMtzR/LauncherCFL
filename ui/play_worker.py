@@ -1,4 +1,3 @@
-
 from PySide6.QtCore import QThread, Signal
 from core import game_launcher
 
@@ -6,7 +5,8 @@ from core import game_launcher
 class PlayWorker(QThread):
     progress = Signal(int)
     log      = Signal(str)
-    done     = Signal(bool)
+    done     = Signal(bool, str)      # ok, mensaje de error (vacío si ok)
+    already_running = Signal()
 
     def __init__(self, account, target="modpack", ram_gb=6, parent=None):
         super().__init__(parent)
@@ -16,6 +16,10 @@ class PlayWorker(QThread):
 
     def run(self):
         try:
+            # El escaneo completo (PowerShell) tarda ~1 s: aquí no congela la UI.
+            if game_launcher.is_game_running():
+                self.already_running.emit()
+                return
             if self._target == "modpack":
                 game_launcher.play_modpack(
                     self._account, self.log.emit, self.progress.emit, ram_gb=self._ram)
@@ -27,7 +31,8 @@ class PlayWorker(QThread):
                 else:
                     game_launcher.play_vanilla(
                         version, self._account, self.log.emit, self.progress.emit, ram_gb=self._ram)
-            self.done.emit(True)
+            self.done.emit(True, "")
         except Exception as e:
-            self.log.emit(f"❌ Error al lanzar: {e}")
-            self.done.emit(False)
+            msg = str(e).strip() or e.__class__.__name__
+            self.log.emit(f"❌ Error al lanzar: {msg}")
+            self.done.emit(False, msg)

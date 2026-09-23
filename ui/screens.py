@@ -9,14 +9,18 @@ from PySide6.QtCore import *
 from PySide6.QtGui import *
 
 from . import theme as T
-from .components import Spinner, GlowBar, LogBox, PlayBtn, SecBtn, WinBtn, NavItem
-from .mods_page import ModsPage
+from .components import (
+    Spinner, GlowBar, LogBox, PlayBtn, SecBtn, WinBtn, NavItem,
+    IconLabel, make_icon,
+)
 from .gallery import Lightbox
 from .mods_page import ModsPage, HeroBanner
 from .version_dialog import VersionDialog
-from core.utils import resource_path
-from core.launcherUpdate import LAUNCHER_VERSION as APP_VERSION
-from core import accounts, checker, paths
+from .version_list import VersionList
+from core.utils import resource_path, max_game_ram_gb, total_ram_gb
+from core.launcherUpdate import get_local_version as get_launcher_version
+from core.updater import get_local_version as get_local_modpack_version
+from core import accounts, checker, paths, game_launcher
 from core.game_launcher import MODPACK_FORGE_VERSION
 import config as cfg
 
@@ -25,19 +29,19 @@ try:
 except Exception:  # qtawesome opcional; si falla usamos texto
     qta = None
 
-MODPACK_VERSION = "1.0.0"
-LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.ico")
+LOGO_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         "assets", "logo.ico")
+SIDEBAR_W = 196
+
+LAUNCHER_VERSION = get_launcher_version()
 
 
-def _read_launcher_version():
-    path = os.path.join(os.getenv("APPDATA", ""), "CFLLauncher", "launcherVersion.txt")
+def _installed_modpack_version():
+    """Versión del modpack guardada en disco ('' si no hay)."""
     try:
-        with open(path) as f:
-            return f.read().strip() or APP_VERSION
-    except FileNotFoundError:
-        return APP_VERSION
-
-LAUNCHER_VERSION = _read_launcher_version()
+        return get_local_modpack_version() or ""
+    except Exception:
+        return ""
 
 
 def get_logo(resource_fn=None):
@@ -79,8 +83,9 @@ class SplashScreen(QWidget):
         lay.addWidget(s); lay.addSpacing(40)
 
         row = QHBoxLayout(); row.setAlignment(Qt.AlignCenter); row.setSpacing(12)
-        self._spinner = Spinner(size=20, color=T.ACCENT); self._spinner.start()
+        self._spinner = Spinner(size=20, color=T.ACCENT, parent=self)
         row.addWidget(self._spinner)
+        self._spinner.start()
         self._lbl = QLabel("Verificando actualizaciones...")
         self._lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
                                f" color:{T.TEXT2}; letter-spacing:1px;")
@@ -112,46 +117,29 @@ class SplashScreen(QWidget):
 
 
 
-class _HomeVersionLoader(QThread):
-    loaded = Signal(list, list)
-
-    def __init__(self, snapshots=False, old=False, parent=None):
-        super().__init__(parent)
-        self._snapshots = snapshots
-        self._old = old
-
-    def run(self):
-        try:
-            from core import game_launcher
-            versions = game_launcher.list_versions(self._snapshots, self._old)
-            forge_versions = game_launcher.list_installed_forge_versions()
-            self.loaded.emit(versions, forge_versions)
-        except Exception:
-            self.loaded.emit([], [])
-
-
 class CoverArt(QWidget):
     def __init__(self, image_path, parent=None):
         super().__init__(parent)
-        self._pix = QPixmap(image_path)
         self.setFixedSize(240, 138)
+        # Tamaño fijo: se escala UNA vez en lugar de en cada repintado.
+        pix = QPixmap(image_path)
+        self._pix = pix.scaled(self.size() * 2, Qt.KeepAspectRatioByExpanding,
+                               Qt.SmoothTransformation) if not pix.isNull() else pix
 
     def paintEvent(self, _):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
         path = QPainterPath()
         path.addRoundedRect(QRectF(self.rect()), 10, 10)
         p.setClipPath(path)
 
         if not self._pix.isNull():
-            scaled = self._pix.scaled(
-                self.size(),
-                Qt.KeepAspectRatioByExpanding,
-                Qt.SmoothTransformation,
-            )
-            x = (scaled.width() - self.width()) // 2
-            y = (scaled.height() - self.height()) // 2
-            p.drawPixmap(0, 0, scaled, x, y, self.width(), self.height())
+            src = self._pix
+            ratio = max(self.width() / src.width(), self.height() / src.height())
+            sw, sh = self.width() / ratio, self.height() / ratio
+            p.drawPixmap(QRectF(self.rect()), src,
+                         QRectF((src.width() - sw) / 2, (src.height() - sh) / 2, sw, sh))
         else:
             p.fillRect(self.rect(), QColor(T.CARD_HI))
 
@@ -180,14 +168,19 @@ class MainScreen(QWidget):
         self._state = self.S_CHECKING
         self._account_mode = ""
         self._home_target = "modpack"
-        self._home_snap = False
-        self._home_old = False
-        self._current_version = ""
+        self._current_version = _installed_modpack_version()
         self._account = None
         self._settings = QSettings("CFL", "Launcher")
-        self._ram_gb = int(self._settings.value("game/ram_gb", 6, int))
-        self._syncing_combo = False
+        self._max_ram = max_game_ram_gb()
+        self._ram_gb = max(2, min(self._max_ram, int(self._settings.value("game/ram_gb", 6, int))))
+        self._game_running = False
         self._pending_skin_path = ""
+        self._last_repair_backup = ""
+        self._recovery_required = False
+        self._health_cache = None          # (instante, dict) de checker.install_health
+        self._overlay_wanted = False       # el usuario quiere ver el progreso
+        self._busy_text = ""               # último estado de la tarea en curso
+        self._checked_at = QDateTime.currentDateTime()
         self._build()
 
     def _build(self):
@@ -195,7 +188,7 @@ class MainScreen(QWidget):
         root.setContentsMargins(0, 0, 0, 0); root.setSpacing(0)
 
         # ── SIDEBAR ───────────────────────────────────────────────
-        sidebar = QWidget(); sidebar.setFixedWidth(196)
+        sidebar = QWidget(); sidebar.setFixedWidth(SIDEBAR_W)
         sidebar.setStyleSheet(f"background: {T.rgba(T.SURFACE, 0.92)};")
         sb = QVBoxLayout(sidebar)
         sb.setContentsMargins(14, 20, 14, 16); sb.setSpacing(4); sb.setAlignment(Qt.AlignTop)
@@ -218,8 +211,8 @@ class MainScreen(QWidget):
         sb.addLayout(logo_row); sb.addSpacing(22)
 
         self._nav_home = NavItem("home", "INICIO", active=True)
-        self._nav_modpacks = NavItem("spark", "MODPACKS")
-        self._nav_mods = NavItem("grid", "MODS")
+        self._nav_modpacks = NavItem("cube", "MODPACKS")
+        self._nav_mods = NavItem("puzzle", "MODS")
         self._nav_cfg  = NavItem("gear", "AJUSTES")
         for b in [self._nav_home, self._nav_modpacks, self._nav_mods, self._nav_cfg]:
             sb.addWidget(b)
@@ -245,6 +238,11 @@ class MainScreen(QWidget):
                                           f" color:{T.MUTED}; background:transparent; border:none;")
         st_col.addWidget(self._sb_status_title); st_col.addWidget(self._sb_status_sub)
         ss.addLayout(st_col); ss.addStretch()
+        # Clic en la pastilla: ir a Inicio y ver el progreso/registro desde
+        # cualquier página (el usuario puede navegar libre mientras instala).
+        self._sb_status.setCursor(Qt.PointingHandCursor)
+        self._sb_status.setToolTip("Ver progreso y registro")
+        self._sb_status.mousePressEvent = lambda e: self._show_activity()
         sb.addWidget(self._sb_status)
         sb.addSpacing(12)
 
@@ -280,17 +278,23 @@ class MainScreen(QWidget):
         self._bread.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px;"
                                  f" color:{T.MUTED}; letter-spacing:2px;")
         tb.addWidget(self._bread); tb.addStretch()
-        self._ver_badge = QLabel(f"Modpack v{MODPACK_VERSION}")
-        self._ver_badge.setStyleSheet(f"font-family:'{T.FONT_MONO}'; font-size:10px;"
-            f" color:{T.ACCENT_HI}; background:{T.rgba(T.ACCENT,0.09)};"
-            f" border:1px solid {T.rgba(T.ACCENT,0.22)}; border-radius:4px; padding:3px 10px;")
-        tb.addWidget(self._ver_badge); tb.addSpacing(8)
+        self._ver_badge = QLabel()
+        # Alto fijo: sin él la etiqueta se estiraba a toda la barra (48 px)
+        # y se veía como un recuadro naranja gigante.
+        self._ver_badge.setFixedHeight(22)
+        self._ver_badge.setAlignment(Qt.AlignCenter)
+        self.update_version_badge(self._current_version)
+        tb.addWidget(self._ver_badge, alignment=Qt.AlignVCenter); tb.addSpacing(10)
         sep = QFrame(); sep.setFrameShape(QFrame.VLine); sep.setFixedHeight(20)
         sep.setStyleSheet(f"color:{T.BORDER};")
-        tb.addWidget(sep)
+        tb.addWidget(sep, alignment=Qt.AlignVCenter)
         self._min_btn   = WinBtn("─", hover_bg="#1b2230", hover_fg=T.TEXT)
+        self._max_btn   = WinBtn("□", hover_bg="#1b2230", hover_fg=T.TEXT)
         self._close_btn = WinBtn("✕", hover_bg="#7f1d1d", hover_fg="#ffffff")
-        tb.addWidget(self._min_btn); tb.addWidget(self._close_btn)
+        self._min_btn.setToolTip("Minimizar")
+        self._max_btn.setToolTip("Maximizar")
+        self._close_btn.setToolTip("Cerrar")
+        tb.addWidget(self._min_btn); tb.addWidget(self._max_btn); tb.addWidget(self._close_btn)
         cl.addWidget(topbar)
 
         # Páginas
@@ -306,255 +310,6 @@ class MainScreen(QWidget):
 
         # Visor (encima de todo)
         self._lightbox = Lightbox(self)
-
-    # ── Página INICIO (hero + panel inferior) ─────────────────────
-    def _build_home_page_legacy(self):
-        page = QWidget();
-        page.setStyleSheet("background:transparent;")
-        ph = QVBoxLayout(page);
-        ph.setContentsMargins(0, 0, 0, 0);
-        ph.setSpacing(0)
-        banner = HeroBanner(
-            resource_path("assets/home_banner.png"),
-            show_text=False
-        )
-        banner.setFixedHeight(340)
-
-        hero = QWidget()
-        hero.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        hero.setStyleSheet("background:transparent;")
-        hl = QVBoxLayout(hero); hl.setContentsMargins(52, 0, 52, 0); hl.setSpacing(0)
-        hl.addWidget(banner)
-        hl.addSpacing(30)
-
-
-        self._tag = QLabel("MODPACK  ·  MINECRAFT 1.20.1")
-        self._tag.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; font-weight:600;"
-                               f" color:{T.ACCENT_HI}; letter-spacing:5px;")
-        hl.addWidget(self._tag); hl.addSpacing(8)
-        self._title = QLabel("CFL LAUNCHER")
-        self._title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:52px; font-weight:900;"
-                                 f" color:{T.TEXT}; letter-spacing:3px;")
-        hl.addWidget(self._title); hl.addSpacing(10)
-        self._desc = QLabel("ChafaLand Modpack Oficial  ·  +340 Mods activos")
-        self._desc.setStyleSheet(f"font-family:'{T.FONT}'; font-size:13px; font-weight:400; color:{T.MUTED};")
-        hl.addWidget(self._desc); hl.addSpacing(28)
-
-        btn_row = QHBoxLayout(); btn_row.setSpacing(12); btn_row.setAlignment(Qt.AlignLeft)
-        self._main_btn = PlayBtn(); self._main_btn.setText("CARGANDO..."); self._main_btn.setEnabled(False)
-        self._main_btn.clicked.connect(self._on_main)
-        self._sec_btn = SecBtn("..."); self._sec_btn.setEnabled(False)
-        self._sec_btn.clicked.connect(self._on_sec)
-        self._chk_spin = Spinner(size=20, color=T.ACCENT_HI)
-        btn_row.addWidget(self._main_btn); btn_row.addWidget(self._sec_btn)
-        btn_row.addSpacing(6); btn_row.addWidget(self._chk_spin)
-        hl.addLayout(btn_row)
-
-        hl.addSpacing(28)
-
-        stats = QHBoxLayout()
-        stats.setSpacing(12)
-
-        for txt in (
-
-        ):
-            card = QLabel(txt)
-            card.setAlignment(Qt.AlignCenter)
-            card.setFixedSize(170, 54)
-
-            card.setStyleSheet(f"""
-                background:{T.rgba(T.CARD, 0.70)};
-                border:1px solid {T.BORDER};
-                border-radius:14px;
-                color:{T.TEXT};
-                font-size:13px;
-                font-weight:700;
-            """)
-
-            stats.addWidget(card)
-
-        stats.addStretch()
-
-        hl.addLayout(stats)
-
-        bottom = QWidget(); bottom.setFixedHeight(140)
-        bottom.setStyleSheet(f"background:{T.rgba(T.SURFACE,0.70)};"
-                            f" border-top:1px solid {T.BORDER};")
-        bl = QVBoxLayout(bottom); bl.setContentsMargins(52, 14, 52, 16); bl.setSpacing(6)
-        sr = QHBoxLayout()
-        self._st_lbl = QLabel("INICIANDO")
-        self._st_lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; font-weight:700;"
-                                  f" color:{T.ACCENT_HI}; letter-spacing:3px;")
-        self._pct_lbl = QLabel("")
-        self._pct_lbl.setStyleSheet(f"font-family:'{T.FONT_MONO}'; font-size:9px; color:{T.MUTED};")
-        sr.addWidget(self._st_lbl); sr.addStretch(); sr.addWidget(self._pct_lbl)
-        bl.addLayout(sr)
-        self._bar = GlowBar(); bl.addWidget(self._bar); bl.addSpacing(5)
-        self._log = LogBox(); bl.addWidget(self._log)
-
-        ph.addWidget(hero); ph.addWidget(bottom)
-        return page
-
-    # ── Página INICIO (hero + tarjeta + releases/novedades) ───────
-    def _build_home_page(self):
-        page = QWidget()
-        page.setStyleSheet(f"background:{T.BG};")
-        ph = QVBoxLayout(page)
-        ph.setContentsMargins(0, 0, 0, 0)
-        ph.setSpacing(0)
-
-        body = QWidget()
-        body.setStyleSheet(f"background:{T.BG};")
-        body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        hl = QVBoxLayout(body)
-        hl.setContentsMargins(26, 14, 26, 10)
-        hl.setSpacing(12)
-
-        # ── HERO grande con texto encima ──────────────────────────
-        banner = HeroBanner(resource_path("assets/home_banner.png"), show_text=False)
-        banner.setFixedHeight(162)
-        bl_ = banner.layout()
-        bl_.setContentsMargins(30, 20, 30, 18)
-        bl_.addStretch()
-        hero_eyebrow = QLabel("BIENVENIDO")
-        hero_eyebrow.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; font-weight:800;"
-                                   f" color:{T.ACCENT_HI}; letter-spacing:4px; background:transparent;")
-        hero_title = QLabel("¿Qué quieres jugar hoy?")
-        hero_title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:30px; font-weight:900;"
-                                 " color:#ffffff; background:transparent;")
-        hero_sub = QLabel("Tu aventura en Minecraft comienza aquí.")
-        hero_sub.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px;"
-                               f" color:{T.TEXT2}; background:transparent;")
-        bl_.addWidget(hero_eyebrow)
-        bl_.addWidget(hero_title)
-        bl_.addSpacing(2)
-        bl_.addWidget(hero_sub)
-        hl.addWidget(banner)
-
-        # Aviso (solo se muestra en premium)
-        self._home_notice = QLabel("")
-        self._home_notice.setWordWrap(True)
-        self._home_notice.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
-                                        f" color:{T.INFO}; background:{T.rgba(T.INFO,0.08)};"
-                                        f" border:1px solid {T.rgba(T.INFO,0.20)};"
-                                        " border-radius:8px; padding:8px 10px;")
-        self._home_notice.hide()
-        hl.addWidget(self._home_notice)
-
-        # ── TARJETA MODPACK ───────────────────────────────────────
-        self._home_modpack_card = QFrame()
-        self._home_modpack_card.setObjectName("homeModpackCard")
-        self._home_modpack_card.setCursor(Qt.PointingHandCursor)
-        self._home_modpack_card.mousePressEvent = lambda e: self._select_home_modpack()
-        card_v = QVBoxLayout(self._home_modpack_card)
-        card_v.setContentsMargins(18, 15, 18, 14)
-        card_v.setSpacing(12)
-
-        mc = QHBoxLayout()
-        mc.setSpacing(16)
-
-        icon_box = QLabel("CFL")
-        icon_box.setAlignment(Qt.AlignCenter)
-        icon_box.setFixedSize(78, 78)
-        icon_box.setStyleSheet(f"font-family:'{T.FONT}'; font-size:17px; font-weight:900; color:{T.ACCENT};"
-                               f" background:{T.rgba(T.ACCENT, 0.10)};"
-                               f" border:1px solid {T.rgba(T.ACCENT, 0.70)};"
-                               " border-radius:10px;")
-        px = QPixmap(get_logo(self._resource_fn))
-        if not px.isNull():
-            icon_box.setPixmap(px.scaled(52, 52, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        mc.addWidget(icon_box)
-
-        txt = QVBoxLayout()
-        txt.setSpacing(5)
-        title_line = QHBoxLayout()
-        title_line.setSpacing(10)
-        self._home_title_lbl = QLabel("ChafaLand Modpack")
-        self._home_title_lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:23px; font-weight:900;"
-                                           f" color:{T.TEXT}; background:transparent;")
-        self._home_badge = QLabel("ACTUAL")
-        self._home_badge.setAlignment(Qt.AlignCenter)
-        self._home_badge.setMinimumWidth(72)
-        title_line.addWidget(self._home_title_lbl)
-        title_line.addWidget(self._home_badge, alignment=Qt.AlignVCenter)
-        title_line.addStretch()
-
-        self._home_meta_line = QLabel("")
-        self._home_meta_line.setTextFormat(Qt.RichText)
-        self._home_meta_line.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px;"
-                                           f" color:{T.TEXT2}; background:transparent;")
-        self._home_modpack_status = QLabel("Listo para jugar")
-        self._home_modpack_status.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
-                                                f" color:{T.MUTED}; background:transparent;")
-        txt.addLayout(title_line)
-        txt.addWidget(self._home_meta_line)
-        txt.addWidget(self._home_modpack_status)
-        txt.addStretch()
-        mc.addLayout(txt)
-        mc.addStretch()
-
-        play_wrap = QHBoxLayout()
-        play_wrap.setSpacing(0)
-        self._main_btn = PlayBtn()
-        self._main_btn.setText("CARGANDO...")
-        self._main_btn.setEnabled(False)
-        self._main_btn.clicked.connect(self._on_home_play)
-        self._versions_toggle = QPushButton("▼")
-        self._versions_toggle.setCursor(Qt.PointingHandCursor)
-        self._versions_toggle.setFixedSize(52, 52)
-        self._versions_toggle.setStyleSheet(self._split_arrow_qss())
-        self._versions_toggle.clicked.connect(self._open_all_versions)
-        play_wrap.addWidget(self._main_btn)
-        play_wrap.addWidget(self._versions_toggle)
-        mc.addLayout(play_wrap)
-        card_v.addLayout(mc)
-
-        stats_row = QHBoxLayout()
-        stats_row.setSpacing(0)
-        self._home_stat_profile = self._make_home_stat("PERFIL ACTIVO", "Modpack v...")
-        self._home_stat_version = self._make_home_stat("VERSIÓN", "Forge 1.20.1")
-        self._home_stat_mods = self._make_home_stat("MODS INSTALADOS", "+340")
-        self._home_stat_session = self._make_home_stat("ÚLTIMA SESIÓN", "Nunca")
-        for stat in (
-            self._home_stat_profile,
-            self._home_stat_version,
-            self._home_stat_mods,
-            self._home_stat_session,
-        ):
-            stats_row.addWidget(stat)
-        card_v.addLayout(stats_row)
-        hl.addWidget(self._home_modpack_card)
-
-        # Combo de versiones (oculto): reutiliza el cargador de versiones.
-        # Las filas visibles de RELEASES se generan a partir de él.
-        self._home_version_combo = QComboBox()
-        self._home_version_combo.currentIndexChanged.connect(self._select_home_combo)
-        self._home_version_combo.hide()
-
-        # ── DOS COLUMNAS: RELEASES + NOVEDADES ────────────────────
-        columns = QHBoxLayout()
-        columns.setSpacing(14)
-        columns.setAlignment(Qt.AlignTop)
-        columns.addWidget(self._build_releases_panel(), 1)
-        columns.addWidget(self._build_novedades_panel(), 1)
-        hl.addLayout(columns, 1)
-
-        ph.addWidget(body)
-
-        # ── BARRA INFERIOR DE INFO ────────────────────────────────
-        ph.addWidget(self._build_info_bar())
-
-        # ── OVERLAY DE PROGRESO (oculto; aparece al instalar) ─────
-        self._build_progress_overlay()
-
-        # Auxiliares que otros métodos esperan que existan
-        self._sec_btn = SecBtn("...", page)
-        self._sec_btn.hide()
-        self._chk_spin = Spinner(size=20, color=T.ACCENT_HI)
-
-        self._reload_home_versions()
-        self._refresh_account_badge()
-        return page
 
     # ── Botón de red social (barra lateral) ───────────────────────
     def _make_social_btn(self, icon_name, tooltip, url):
@@ -594,202 +349,296 @@ class MainScreen(QWidget):
             b.setEnabled(False)
         return b
 
-    # ── Panel RELEASES ────────────────────────────────────────────
-    def _build_releases_panel(self):
-        panel = QFrame()
-        panel.setObjectName("homePanel")
-        panel.setStyleSheet(self._home_panel_qss())
-        v = QVBoxLayout(panel)
-        v.setContentsMargins(16, 13, 16, 14)
-        v.setSpacing(10)
+    # ── Página INICIO (hero + tarjeta + versiones/estado) ─────────
+    def _build_home_page(self):
+        page = QWidget()
+        page.setStyleSheet(f"background:{T.BG};")
+        ph = QVBoxLayout(page)
+        ph.setContentsMargins(0, 0, 0, 0)
+        ph.setSpacing(0)
 
-        title = QLabel("RELEASES")
-        title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; font-weight:900;"
-                            f" color:{T.ACCENT_HI}; letter-spacing:2px; background:transparent; border:none;")
-        v.addWidget(title)
-
-        # Tabs: Releases (fijo) + Snapshots / Antiguas (toggles)
-        tabs = QHBoxLayout()
-        tabs.setSpacing(8)
-        tabs.setAlignment(Qt.AlignLeft)
-        rel = QLabel("Releases")
-        rel.setStyleSheet(f"""
-            QLabel {{
-                background:{T.rgba(T.ACCENT,0.14)}; color:{T.ACCENT_HI};
-                border:1px solid {T.rgba(T.ACCENT,0.4)}; border-radius:12px;
-                padding:4px 12px; font-family:'{T.FONT}'; font-size:11px; font-weight:700;
-            }}
-        """)
-        self._home_chip_snap = self._make_home_chip("Snapshots", self._toggle_home_snap)
-        self._home_chip_old = self._make_home_chip("Antiguas", self._toggle_home_old)
-        tabs.addWidget(rel)
-        tabs.addWidget(self._home_chip_snap)
-        tabs.addWidget(self._home_chip_old)
-        tabs.addStretch()
-        v.addLayout(tabs)
-
-        # Lista de versiones (scroll)
+        # El cuerpo va en un scroll: en ventanas bajas ya no se enciman la
+        # tarjeta, el banner y los paneles (se desplaza en lugar de romperse).
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setStyleSheet(f"""
-            QScrollArea {{ background:transparent; border:none; }}
-            QScrollBar:vertical {{ background:transparent; width:8px; margin:2px; }}
-            QScrollBar::handle:vertical {{ background:{T.BORDER_HI}; border-radius:4px; min-height:24px; }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; }}
+        scroll.setStyleSheet(self._scroll_qss())
+
+        body = QWidget()
+        body.setStyleSheet("background:transparent;")
+        hl = QVBoxLayout(body)
+        hl.setContentsMargins(26, 14, 26, 12)
+        hl.setSpacing(12)
+
+        # ── HERO con texto encima (alto adaptable, ver resizeEvent) ───
+        self._home_banner = HeroBanner(resource_path("assets/home_banner.png"), show_text=False)
+        self._home_banner.setFixedHeight(150)
+        bl_ = self._home_banner.layout()
+        bl_.setContentsMargins(30, 14, 30, 16)
+        bl_.addStretch()
+        hero_eyebrow = QLabel("BIENVENIDO")
+        hero_eyebrow.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; font-weight:800;"
+                                   f" color:{T.ACCENT_HI}; letter-spacing:4px; background:transparent;")
+        self._hero_title = QLabel("¿Qué quieres jugar hoy?")
+        self._hero_title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:28px; font-weight:900;"
+                                       " color:#ffffff; background:transparent;")
+        self._hero_sub = QLabel("Elige el modpack o cualquier versión de Minecraft.")
+        self._hero_sub.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px;"
+                                     f" color:{T.TEXT2}; background:transparent;")
+        bl_.addWidget(hero_eyebrow)
+        bl_.addWidget(self._hero_title)
+        bl_.addSpacing(2)
+        bl_.addWidget(self._hero_sub)
+        hl.addWidget(self._home_banner)
+
+        # Aviso (solo se muestra en premium)
+        self._home_notice = QLabel("")
+        self._home_notice.setWordWrap(True)
+        self._home_notice.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
+                                        f" color:{T.INFO}; background:{T.rgba(T.INFO,0.08)};"
+                                        f" border:1px solid {T.rgba(T.INFO,0.20)};"
+                                        " border-radius:8px; padding:8px 10px;")
+        self._home_notice.hide()
+        hl.addWidget(self._home_notice)
+
+        hl.addWidget(self._build_target_card())
+
+        # ── DOS COLUMNAS: VERSIONES + ESTADO ──────────────────────
+        columns = QHBoxLayout()
+        columns.setSpacing(14)
+        columns.addWidget(self._build_releases_panel(), 3)
+        columns.addWidget(self._build_news_panel(), 2)
+        hl.addLayout(columns, 1)
+
+        scroll.setWidget(body)
+        ph.addWidget(scroll, 1)
+
+        # ── BARRA INFERIOR DE INFO ────────────────────────────────
+        ph.addWidget(self._build_info_bar())
+
+        # ── OVERLAY DE PROGRESO (oculto; aparece al instalar) ─────
+        self._build_progress_overlay()
+
+        # Auxiliar que otros métodos esperan que exista
+        self._sec_btn = SecBtn("...", page)
+        self._sec_btn.hide()
+        return page
+
+    def _build_target_card(self):
+        """Tarjeta del destino elegido: modpack o la versión seleccionada."""
+        self._home_modpack_card = QFrame()
+        self._home_modpack_card.setObjectName("homeModpackCard")
+        self._home_modpack_card.setCursor(Qt.PointingHandCursor)
+        self._home_modpack_card.setToolTip("Seleccionar el modpack")
+        self._home_modpack_card.mousePressEvent = lambda e: self._select_home_modpack()
+        card_v = QVBoxLayout(self._home_modpack_card)
+        card_v.setContentsMargins(18, 15, 18, 14)
+        card_v.setSpacing(12)
+
+        mc = QHBoxLayout()
+        mc.setSpacing(16)
+
+        self._home_icon_box = QLabel("CFL")
+        self._home_icon_box.setAlignment(Qt.AlignCenter)
+        self._home_icon_box.setFixedSize(74, 74)
+        self._home_icon_box.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:17px; font-weight:900; color:{T.ACCENT};"
+            f" background:{T.rgba(T.ACCENT, 0.10)}; border:1px solid {T.rgba(T.ACCENT, 0.70)};"
+            " border-radius:10px;")
+        px = QPixmap(get_logo(self._resource_fn))
+        if not px.isNull():
+            self._home_icon_box.setPixmap(px.scaled(50, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        mc.addWidget(self._home_icon_box, alignment=Qt.AlignVCenter)
+
+        txt = QVBoxLayout()
+        txt.setSpacing(5)
+        title_line = QHBoxLayout()
+        title_line.setSpacing(10)
+        self._home_title_lbl = QLabel("ChafaLand Modpack")
+        self._home_title_lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:22px; font-weight:900;"
+                                           f" color:{T.TEXT}; background:transparent;")
+        self._home_badge = QLabel("ACTUAL")
+        self._home_badge.setAlignment(Qt.AlignCenter)
+        self._home_badge.setMinimumWidth(72)
+        title_line.addWidget(self._home_title_lbl)
+        title_line.addWidget(self._home_badge, alignment=Qt.AlignVCenter)
+        # Spinner de "verificando/procesando": va DENTRO del layout (con padre),
+        # si no, al hacer .show() se abre como ventana flotante aparte.
+        self._chk_spin = Spinner(size=18, color=T.ACCENT_HI, parent=self._home_modpack_card)
+        title_line.addWidget(self._chk_spin, alignment=Qt.AlignVCenter)
+        title_line.addStretch()
+
+        self._home_meta_line = QWidget()
+        self._home_meta_line.setStyleSheet("background:transparent;")
+        meta = QHBoxLayout(self._home_meta_line)
+        meta.setContentsMargins(0, 0, 0, 0)
+        meta.setSpacing(7)
+        self._home_meta_forge_icon = IconLabel("anvil", 15, T.MUTED)
+        self._home_meta_forge_text = self._make_meta_text("Forge 1.20.1")
+        self._home_meta_mods_icon = IconLabel("puzzle", 15, T.MUTED)
+        self._home_meta_mods_text = self._make_meta_text("+340 mods")
+        self._home_meta_ready_icon = IconLabel("check-circle", 15, T.OK)
+        self._home_meta_ready_text = self._make_meta_text("Listo para jugar")
+        for icon, label in (
+            (self._home_meta_forge_icon, self._home_meta_forge_text),
+            (self._home_meta_mods_icon, self._home_meta_mods_text),
+            (self._home_meta_ready_icon, self._home_meta_ready_text),
+        ):
+            meta.addWidget(icon, alignment=Qt.AlignVCenter)
+            meta.addWidget(label, alignment=Qt.AlignVCenter)
+            if label is not self._home_meta_ready_text:
+                dot = QLabel("·")
+                dot.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; color:{T.MUTED};"
+                                  " background:transparent;")
+                meta.addWidget(dot, alignment=Qt.AlignVCenter)
+        meta.addStretch()
+        self._home_action_hint = QLabel("")
+        self._home_action_hint.setWordWrap(True)
+        self._home_action_hint.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px;"
+                                             f" color:{T.MUTED}; background:transparent;")
+        txt.addLayout(title_line)
+        txt.addWidget(self._home_meta_line)
+        txt.addWidget(self._home_action_hint)
+        mc.addLayout(txt, 1)
+
+        play_wrap = QHBoxLayout()
+        play_wrap.setSpacing(0)
+        self._main_btn = PlayBtn()
+        self._main_btn.setRoundSide("left")   # split-button: solo izquierda redondeada
+        self._main_btn.setText("CARGANDO...")
+        self._main_btn.setEnabled(False)
+        self._main_btn.clicked.connect(self._on_home_play)
+        self._versions_toggle = QPushButton()
+        self._versions_toggle.setCursor(Qt.PointingHandCursor)
+        self._versions_toggle.setToolTip("Elegir otra versión")
+        self._versions_toggle.setFixedSize(46, 52)
+        self._versions_toggle.setIcon(make_icon("chevron-down", 16, "#ffffff"))
+        self._versions_toggle.setIconSize(QSize(16, 16))
+        self._versions_toggle.setStyleSheet(self._split_arrow_qss())
+        self._versions_toggle.clicked.connect(self._open_all_versions)
+        play_wrap.addWidget(self._main_btn)
+        play_wrap.addWidget(self._versions_toggle)
+        mc.addLayout(play_wrap)
+        card_v.addLayout(mc)
+
+        stats_row = QHBoxLayout()
+        stats_row.setSpacing(8)
+        self._home_stat_profile = self._make_home_stat("layers", "PERFIL", "Modpack")
+        self._home_stat_version = self._make_home_stat("anvil", "VERSIÓN", "Forge 1.20.1")
+        self._home_stat_mods = self._make_home_stat("puzzle", "MODS INSTALADOS", "+340")
+        self._home_stat_session = self._make_home_stat("clock", "ÚLTIMA SESIÓN", "Nunca")
+        for stat in (
+            self._home_stat_profile,
+            self._home_stat_version,
+            self._home_stat_mods,
+            self._home_stat_session,
+        ):
+            stats_row.addWidget(stat, 1)
+        card_v.addLayout(stats_row)
+        return self._home_modpack_card
+
+    def _panel_title(self, text):
+        title = QLabel(text)
+        title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; font-weight:900;"
+                            f" color:{T.ACCENT_HI}; letter-spacing:2px; background:transparent; border:none;")
+        return title
+
+    def _link_btn(self, text, cb):
+        b = QPushButton(text)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setStyleSheet(f"""
+            QPushButton {{ background:transparent; border:none; color:{T.MUTED};
+                           font-family:'{T.FONT}'; font-size:11px; font-weight:700; padding:2px 4px; }}
+            QPushButton:hover {{ color:{T.ACCENT_HI}; }}
         """)
-        holder = QWidget()
-        holder.setStyleSheet("background:transparent;")
-        self._release_rows_lay = QVBoxLayout(holder)
-        self._release_rows_lay.setContentsMargins(0, 0, 4, 0)
-        self._release_rows_lay.setSpacing(6)
-        self._release_rows_lay.setAlignment(Qt.AlignTop)
-        loading = QLabel("Cargando versiones…")
-        loading.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; color:{T.MUTED};"
-                              " background:transparent; border:none;")
-        self._release_rows_lay.addWidget(loading)
-        scroll.setWidget(holder)
-        v.addWidget(scroll, 1)
+        b.clicked.connect(cb)
+        return b
 
-        see_all = QPushButton("Ver todas las versiones  ›")
-        see_all.setCursor(Qt.PointingHandCursor)
-        see_all.setStyleSheet(self._utility_btn_qss())
-        see_all.clicked.connect(self._open_all_versions)
-        v.addWidget(see_all)
-        return panel
-
-    def _make_release_row(self, text, index, actual=False, current=False):
-        row = QFrame()
-        row.setObjectName("relRow")
-        row.setCursor(Qt.PointingHandCursor)
-        row.setStyleSheet(f"""
-            QFrame#relRow {{
-                background:{T.rgba(T.SURFACE, 0.66) if not current else T.rgba(T.ACCENT, 0.10)};
-                border:1px solid {T.rgba(T.ACCENT, 0.45) if current else T.BORDER};
-                border-radius:8px;
-            }}
-            QFrame#relRow:hover {{ border-color:{T.rgba(T.ACCENT, 0.35)}; }}
-        """)
-        row.mousePressEvent = lambda e, i=index: self._select_release(i)
-        h = QHBoxLayout(row)
-        h.setContentsMargins(11, 8, 10, 8)
-        h.setSpacing(8)
-        name = QLabel(text)
-        name.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; font-weight:700;"
-                           f" color:{T.TEXT if (actual or current) else T.TEXT2};"
-                           " background:transparent; border:none;")
-        h.addWidget(name)
-        h.addStretch()
-        if actual:
-            b = QLabel("ACTUAL")
-            b.setStyleSheet(f"font-family:'{T.FONT}'; font-size:8px; font-weight:800; color:{T.OK};"
-                            f" background:{T.rgba(T.OK,0.12)}; border:1px solid {T.rgba(T.OK,0.30)};"
-                            " border-radius:4px; padding:3px 7px;")
-            h.addWidget(b)
-        return row
-
-    def _populate_release_rows(self):
-        if not hasattr(self, "_release_rows_lay"):
-            return
-        while self._release_rows_lay.count():
-            it = self._release_rows_lay.takeAt(0)
-            w = it.widget()
-            if w:
-                w.setParent(None)
-                w.deleteLater()
-        combo = self._home_version_combo
-        added = 0
-        for i in range(combo.count()):
-            data = combo.itemData(i)
-            if data is None:
-                continue
-            row = self._make_release_row(
-                combo.itemText(i), i,
-                actual=(data == "modpack"),
-                current=(data == self._home_target),
-            )
-            self._release_rows_lay.addWidget(row)
-            added += 1
-        if added == 0:
-            lbl = QLabel("No se pudieron cargar versiones.")
-            lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; color:{T.MUTED};"
-                              " background:transparent; border:none;")
-            self._release_rows_lay.addWidget(lbl)
-        self._release_rows_lay.addStretch()
-
-    def _select_release(self, index):
-        if 0 <= index < self._home_version_combo.count():
-            self._home_version_combo.setCurrentIndex(index)
-        self._populate_release_rows()
-
-    def _open_all_versions(self):
-        try:
-            dlg = VersionDialog(self.window())
-            if dlg.exec():
-                self._home_target = dlg.selected
-                self._set_combo_to_target()
-                self._refresh_home_card_style()
-                self._update_home_state()
-                self._populate_release_rows()
-        except Exception as ex:
-            self.append_log(f"⚠️ No se pudo abrir el selector de versiones: {ex}")
-
-    # ── Panel NOVEDADES ───────────────────────────────────────────
-    def _build_novedades_panel(self):
+    # ── Panel VERSIONES ───────────────────────────────────────────
+    def _build_releases_panel(self):
         panel = QFrame()
         panel.setObjectName("homePanel")
         panel.setStyleSheet(self._home_panel_qss())
+        panel.setMinimumHeight(250)
         v = QVBoxLayout(panel)
-        v.setContentsMargins(16, 13, 16, 14)
-        v.setSpacing(10)
+        v.setContentsMargins(16, 12, 14, 12)
+        v.setSpacing(8)
 
-        title = QLabel("NOVEDADES RECIENTES")
-        title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; font-weight:900;"
-                            f" color:{T.ACCENT_HI}; letter-spacing:2px; background:transparent; border:none;")
-        v.addWidget(title)
+        head = QHBoxLayout()
+        head.addWidget(self._panel_title("VERSIONES"))
+        head.addStretch()
+        head.addWidget(self._link_btn("Ver en grande  ›", self._open_all_versions))
+        v.addLayout(head)
+
+        self._version_list = VersionList(panel)
+        self._version_list.target_changed.connect(self._set_home_target)
+        v.addWidget(self._version_list, 1)
+
+        note = QLabel("Las versiones sin el modpack juegan en su propia carpeta: "
+                      "no tocan tus mods ni tus mundos del modpack.")
+        note.setWordWrap(True)
+        note.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; color:{T.DIM};"
+                           " background:transparent; border:none;")
+        v.addWidget(note)
+        return panel
+
+    def _open_all_versions(self):
+        try:
+            dlg = VersionDialog(self.window(), current=self._home_target,
+                                modpack_badge=self._modpack_list_badge())
+            if dlg.exec():
+                self._set_home_target(dlg.selected)
+        except Exception as ex:
+            self.append_log(f"⚠️ No se pudo abrir el selector de versiones: {ex}")
+
+    # ── Panel ESTADO / NOVEDADES ──────────────────────────────────
+    def _build_news_panel(self):
+        panel = QFrame()
+        panel.setObjectName("homePanel")
+        panel.setStyleSheet(self._home_panel_qss())
+        panel.setMinimumHeight(250)
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(16, 12, 14, 12)
+        v.setSpacing(6)
+
+        head = QHBoxLayout()
+        head.addWidget(self._panel_title("ESTADO"))
+        head.addStretch()
+        github = getattr(cfg, "GITHUB_URL", "")
+        if github:
+            head.addWidget(self._link_btn("Novedades  ›",
+                                          lambda: self._open_url(github + "/releases")))
+        v.addLayout(head)
 
         holder = QWidget()
         holder.setStyleSheet("background:transparent;")
         self._news_lay = QVBoxLayout(holder)
-        self._news_lay.setContentsMargins(0, 0, 0, 0)
-        self._news_lay.setSpacing(6)
+        self._news_lay.setContentsMargins(0, 2, 0, 0)
+        self._news_lay.setSpacing(4)
         self._news_lay.setAlignment(Qt.AlignTop)
         v.addWidget(holder, 1)
-
-        see_all = QPushButton("Ver todas las novedades  ›")
-        see_all.setCursor(Qt.PointingHandCursor)
-        see_all.setStyleSheet(self._utility_btn_qss())
-        see_all.clicked.connect(lambda: self._open_url(
-            getattr(cfg, "GITHUB_URL", "") + "/releases" if getattr(cfg, "GITHUB_URL", "") else ""))
-        v.addWidget(see_all)
 
         self._refresh_news()
         return panel
 
-    def _make_news_item(self, symbol, color, title, sub):
+    def _make_news_item(self, icon_kind, color, title, sub):
         row = QFrame()
         row.setStyleSheet("QFrame { background:transparent; border:none; }")
+        row.setMinimumHeight(48)
         h = QHBoxLayout(row)
         h.setContentsMargins(2, 4, 2, 4)
-        h.setSpacing(11)
-        ic = QLabel(symbol)
-        ic.setFixedSize(30, 30)
-        ic.setAlignment(Qt.AlignCenter)
-        ic.setStyleSheet(f"color:{color}; background:{T.rgba(color, 0.12)};"
-                         f" border:1px solid {T.rgba(color, 0.25)}; border-radius:8px;"
-                         " font-size:13px; font-weight:900;")
-        h.addWidget(ic, alignment=Qt.AlignTop)
+        h.setSpacing(12)
+        h.addWidget(IconLabel(icon_kind, 24, color), alignment=Qt.AlignTop)
         col = QVBoxLayout()
         col.setSpacing(1)
         t = QLabel(title)
         t.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; font-weight:700;"
                         f" color:{T.TEXT}; background:transparent; border:none;")
-        t.setWordWrap(True)
         s = QLabel(sub)
+        s.setWordWrap(True)
         s.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px;"
                         f" color:{T.MUTED}; background:transparent; border:none;")
-        s.setWordWrap(True)
         col.addWidget(t)
         col.addWidget(s)
         h.addLayout(col, 1)
@@ -804,20 +653,30 @@ class MainScreen(QWidget):
             if w:
                 w.setParent(None)
                 w.deleteLater()
+
         health_text, health_color = self._modpack_health_status()
-        top_ok = health_text == "Mods actualizados"
+        ok = health_color == T.OK
+        mods_title = {
+            self.S_NONE: "Modpack sin instalar",
+            self.S_UPDATE: "Actualización disponible",
+            self.S_BUSY: "Procesando archivos…",
+            self.S_ERROR: "El último proceso falló",
+            self.S_CHECKING: "Verificando…",
+        }.get(self._state, "Todos tus mods están instalados" if ok else health_text)
+        checked = self._checked_at.toString("HH:mm")
+
+        forge_installed = os.path.isdir(os.path.join(
+            paths.get_minecraft_dir(), "versions", game_launcher.modpack_version_id()))
         items = [
-            ("✓" if top_ok else "!", T.OK if top_ok else T.WARN,
-             "Todos tus mods están actualizados" if top_ok else health_text,
-             "Última verificación: hace un momento"),
-            ("⭳", T.ACCENT_HI, f"Forge {self._forge_short()}",
-             f"Versión instalada: {self._forge_short()}"),
-            ("▤", T.INFO, "Optimización de rendimiento",
-             "Mejoras generales y correcciones"),
+            ("check-circle" if ok else "warning", health_color, mods_title,
+             f"Última verificación: hoy a las {checked}"),
+            ("anvil", T.ACCENT_HI, f"Forge {self._forge_short()}",
+             "Instalado" if forge_installed else "Se instala automáticamente al jugar"),
+            ("download", T.INFO, f"CFL Launcher v{LAUNCHER_VERSION}",
+             "Se actualiza solo al abrirlo"),
         ]
-        for symbol, color, t, s in items:
-            self._news_lay.addWidget(self._make_news_item(symbol, color, t, s))
-        self._news_lay.addStretch()
+        for icon_kind, color, t, s in items:
+            self._news_lay.addWidget(self._make_news_item(icon_kind, color, t, s))
 
     # ── Barra inferior de info (RAM / Java + utilidades) ──────────
     def _build_info_bar(self):
@@ -828,73 +687,65 @@ class MainScreen(QWidget):
         l.setContentsMargins(26, 0, 18, 0)
         l.setSpacing(12)
 
-        self._info_ram = QLabel(self._ram_text())
-        self._info_ram.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; color:{T.TEXT2};"
-                                     " background:transparent;")
-        l.addWidget(self._info_ram)
+        ram_item, self._info_ram = self._make_info_item("monitor", self._ram_text())
+        l.addWidget(ram_item)
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
         sep.setFixedHeight(16)
         sep.setStyleSheet(f"color:{T.BORDER};")
         l.addWidget(sep)
-        self._info_java = QLabel("Java:  …")
-        self._info_java.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; color:{T.TEXT2};"
-                                      " background:transparent;")
-        l.addWidget(self._info_java)
+        java_item, self._info_java = self._make_info_item("java", "Java:  …")
+        l.addWidget(java_item)
         l.addStretch()
 
-        self._open_folder_btn = QPushButton("Abrir carpeta del modpack")
+        self._open_folder_btn = QPushButton("Carpeta del modpack")
         self._open_folder_btn.setCursor(Qt.PointingHandCursor)
+        self._open_folder_btn.setIcon(make_icon("folder", 16, T.TEXT2))
+        self._open_folder_btn.setIconSize(QSize(16, 16))
         self._open_folder_btn.setStyleSheet(self._utility_btn_qss())
         self._open_folder_btn.clicked.connect(self._open_modpack_folder)
-        java_btn = QPushButton("Opciones de Java")
+        java_btn = QPushButton("Memoria y Java")
         java_btn.setCursor(Qt.PointingHandCursor)
+        java_btn.setIcon(make_icon("java", 16, T.TEXT2))
+        java_btn.setIconSize(QSize(16, 16))
         java_btn.setStyleSheet(self._utility_btn_qss())
         java_btn.clicked.connect(self._open_java_options)
-        more_btn = QPushButton("•••")
+        more_btn = QPushButton()
         more_btn.setCursor(Qt.PointingHandCursor)
+        more_btn.setToolTip("Más opciones")
         more_btn.setFixedWidth(44)
+        more_btn.setIcon(make_icon("dots", 18, T.TEXT2))
+        more_btn.setIconSize(QSize(18, 18))
         more_btn.setStyleSheet(self._utility_btn_qss())
         more_btn.clicked.connect(self._more_menu)
         l.addWidget(self._open_folder_btn)
         l.addWidget(java_btn)
         l.addWidget(more_btn)
-
-        # Detectar Java sin bloquear el arranque
-        QTimer.singleShot(0, self._fill_java_label)
         return bar
 
-    def _ram_text(self):
-        return f"RAM asignada:  {self._ram_gb}.0 GB"
+    def _make_info_item(self, icon_kind, text):
+        item = QWidget()
+        item.setStyleSheet("background:transparent; border:none;")
+        h = QHBoxLayout(item)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
+        h.addWidget(IconLabel(icon_kind, 17, T.MUTED), alignment=Qt.AlignVCenter)
+        label = QLabel(text)
+        label.setStyleSheet(f"font-family:'{T.FONT}'; font-size:11px; color:{T.TEXT2};"
+                            " background:transparent; border:none;")
+        h.addWidget(label, alignment=Qt.AlignVCenter)
+        return item, label
 
-    def _fill_java_label(self):
-        if hasattr(self, "_info_java"):
-            self._info_java.setText(f"Java:  {self._detect_java_version()}")
-
-    def _detect_java_version(self):
-        cached = getattr(self, "_java_cache", None)
-        if cached:
-            return cached
-        ver = "no detectado"
+    def _refresh_java_label(self):
+        # Java de Mojang que usará el destino (el del sistema no se usa), leído
+        # del disco sin lanzar procesos: antes "java -version" congelaba la UI.
+        if not hasattr(self, "_info_java"):
+            return
         try:
-            import subprocess
-            import re
-            flags = 0
-            if os.name == "nt":
-                flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-            out = subprocess.run(["java", "-version"], capture_output=True, text=True,
-                                 timeout=4, creationflags=flags)
-            blob = (out.stderr or "") + (out.stdout or "")
-            m = re.search(r'version "?([0-9][0-9._]*)', blob)
-            if m:
-                ver = m.group(1)
+            label = game_launcher.java_label(self._home_target)
         except Exception:
-            ver = "no detectado"
-        self._java_cache = ver
-        return ver
-
-    def _open_java_options(self):
-        self._switch_page(3)
+            label = "automático"
+        self._info_java.setText(f"Java:  {label}")
 
     def _more_menu(self):
         m = QMenu(self)
@@ -906,19 +757,83 @@ class MainScreen(QWidget):
             }}
             QMenu::item {{ padding:7px 16px; border-radius:6px; }}
             QMenu::item:selected {{ background:{T.rgba(T.ACCENT,0.18)}; color:{T.TEXT}; }}
+            QMenu::item:disabled {{ color:{T.DIM}; }}
         """)
-        a_folder = m.addAction("Abrir carpeta del modpack")
-        a_reload = m.addAction("Reintentar verificación")
+        a_folder = m.addAction("Abrir carpeta del modpack (.minecraft)")
+        a_instances = m.addAction("Abrir carpeta de versiones independientes")
+        a_log = m.addAction("Ver progreso y registro")
+        m.addSeparator()
+        a_recheck = m.addAction("Volver a verificar el modpack")
+        a_recheck.setEnabled(self._state not in (self.S_BUSY, self.S_CHECKING))
+        a_reload = m.addAction("Recargar lista de versiones")
         m.addSeparator()
         a_github = m.addAction("GitHub del launcher")
-        a_folder.triggered.connect(self._open_modpack_folder)
-        a_reload.triggered.connect(self._reload_home_versions)
+        a_folder.triggered.connect(lambda: self._open_folder(paths.get_minecraft_dir()))
+        a_instances.triggered.connect(lambda: self._open_folder(paths.INSTANCES_DIR))
+        a_log.triggered.connect(self._show_activity)
+        a_recheck.triggered.connect(lambda: self.request_action.emit("recheck"))
+        a_reload.triggered.connect(self._version_list.reload)
         a_github.triggered.connect(lambda: self._open_url(getattr(cfg, "GITHUB_URL", "")))
         m.exec(QCursor.pos())
+
+    def _ram_text(self):
+        return f"RAM:  {self._ram_gb} GB"
+
+    def _open_java_options(self):
+        self._switch_page(3)
 
     def _open_url(self, url):
         if url:
             QDesktopServices.openUrl(QUrl(url))
+
+    def _open_folder(self, folder):
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError:
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+
+    def _scroll_qss(self):
+        return f"""
+            QScrollArea {{ background:transparent; border:none; }}
+            QScrollArea > QWidget > QWidget {{ background:transparent; }}
+            QScrollBar:vertical {{ background:transparent; width:8px; margin:2px; }}
+            QScrollBar::handle:vertical {{
+                background:{T.BORDER_HI}; border-radius:4px; min-height:24px;
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{ height:0; }}
+        """
+
+    def _show_activity(self):
+        """Ir a Inicio y mostrar el progreso/registro."""
+        self._switch_page(0)
+        self._overlay_wanted = True
+        self._show_progress_overlay()
+
+    # ── Destino seleccionado (modpack o versión suelta) ───────────
+    def _set_home_target(self, target):
+        if target is None:
+            return
+        self._home_target = target
+        if hasattr(self, "_version_list"):
+            self._version_list.set_target(target)
+        self._update_home_state()
+
+    def _select_home_modpack(self):
+        self._set_home_target("modpack")
+
+    def _modpack_list_badge(self):
+        """Insignia de la fila 'ChafaLand Modpack' según el estado."""
+        if getattr(self, "_recovery_required", False):
+            return "RECUPERACIÓN", T.ERROR
+        return {
+            self.S_NONE: ("NO INSTALADO", T.INFO),
+            self.S_UPDATE: ("ACTUALIZAR", T.WARN),
+            self.S_ERROR: ("ERROR", T.ERROR),
+            self.S_BUSY: ("PROCESANDO", T.INFO),
+            self.S_CHECKING: ("VERIFICANDO", T.MUTED),
+        }.get(self._state, ("ACTUAL", T.OK))
 
     # ── Overlay de progreso (log + barra), oculto por defecto ─────
     def _build_progress_overlay(self):
@@ -970,17 +885,22 @@ class MainScreen(QWidget):
             return
         W, H = self.width(), self.height()
         ov_h = max(150, min(232, H - 130))
-        x = 196  # ancho de la barra lateral
-        self._progress_overlay.setGeometry(x, H - ov_h, max(1, W - x), ov_h)
+        self._progress_overlay.setGeometry(SIDEBAR_W, H - ov_h, max(1, W - SIDEBAR_W), ov_h)
 
     def _show_progress_overlay(self):
-        if not hasattr(self, "_progress_overlay"):
+        # Solo sobre Inicio: en Mods/Ajustes tapaba botones y no dejaba usar
+        # la página. Allí el progreso se ve en la pastilla de la barra lateral.
+        if not hasattr(self, "_progress_overlay") or not self._overlay_wanted:
+            return
+        if self._pages.currentIndex() != 0:
+            self._progress_overlay.hide()
             return
         self._position_progress_overlay()
         self._progress_overlay.show()
         self._progress_overlay.raise_()
 
     def _hide_progress_overlay(self):
+        self._overlay_wanted = False
         if hasattr(self, "_progress_overlay"):
             self._progress_overlay.hide()
 
@@ -989,10 +909,13 @@ class MainScreen(QWidget):
         if not hasattr(self, "_sb_status_title"):
             return
         st = self._state
-        if st == self.S_CHECKING:
+        if getattr(self, "_recovery_required", False):
+            color, title, sub = T.ERROR, "Recuperación", "Revisa el respaldo"
+        elif st == self.S_CHECKING:
             color, title, sub = T.ACCENT_HI, "Verificando…", "Un momento"
         elif st == self.S_BUSY:
-            color, title, sub = T.INFO, "Procesando…", "Descargando archivos"
+            pct = self._bar._val if hasattr(self, "_bar") else 0
+            color, title, sub = T.INFO, f"Procesando… {pct}%", self._busy_text or "Ver progreso"
         elif st == self.S_NONE:
             color, title, sub = T.INFO, "Sin instalar", "Pulsa Instalar"
         elif st == self.S_UPDATE:
@@ -1010,7 +933,9 @@ class MainScreen(QWidget):
             f" border:1px solid {T.rgba(color,0.22)}; border-radius:10px; }}")
         self._sb_status_dot.setStyleSheet(f"color:{color}; font-size:11px; background:transparent; border:none;")
         self._sb_status_title.setText(title)
-        self._sb_status_sub.setText(sub)
+        fm = self._sb_status_sub.fontMetrics()
+        self._sb_status_sub.setText(fm.elidedText(sub, Qt.ElideRight, 128))
+        self._sb_status_sub.setToolTip(sub)
 
 
     def _home_panel_qss(self):
@@ -1022,32 +947,13 @@ class MainScreen(QWidget):
             }}
         """
 
-    def _make_home_metric(self, label, value):
-        box = QFrame()
-        box.setObjectName("homeMetric")
-        box.setMinimumHeight(56)
-        box.setStyleSheet(f"""
-            QFrame#homeMetric {{
-                background:{T.rgba(T.SURFACE, 0.72)};
-                border:1px solid {T.BORDER};
-                border-radius:8px;
-            }}
-        """)
-        lay = QVBoxLayout(box)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(1)
-        top = QLabel(label)
-        top.setStyleSheet(f"font-family:'{T.FONT}'; font-size:9px; font-weight:900;"
-                          f" color:{T.MUTED}; background:transparent; border:none;")
-        val = QLabel(value)
-        val.setObjectName("value")
-        val.setStyleSheet(f"font-family:'{T.FONT}'; font-size:13px; font-weight:900;"
-                          f" color:{T.TEXT}; background:transparent; border:none;")
-        lay.addWidget(top)
-        lay.addWidget(val)
-        return box
+    def _make_meta_text(self, text):
+        label = QLabel(text)
+        label.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px;"
+                            f" color:{T.TEXT2}; background:transparent;")
+        return label
 
-    def _make_home_stat(self, label, value):
+    def _make_home_stat(self, icon_kind, label, value):
         box = QFrame()
         box.setObjectName("homeStat")
         box.setStyleSheet(f"""
@@ -1057,9 +963,12 @@ class MainScreen(QWidget):
                 border-radius:8px;
             }}
         """)
-        lay = QVBoxLayout(box)
+        lay = QHBoxLayout(box)
         lay.setContentsMargins(14, 10, 14, 10)
-        lay.setSpacing(2)
+        lay.setSpacing(12)
+        lay.addWidget(IconLabel(icon_kind, 19, T.MUTED), alignment=Qt.AlignVCenter)
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
         top = QLabel(label)
         top.setStyleSheet(f"font-family:'{T.FONT}'; font-size:9px; font-weight:900;"
                           f" color:{T.MUTED}; background:transparent; border:none;")
@@ -1068,25 +977,35 @@ class MainScreen(QWidget):
         val.setWordWrap(True)
         val.setStyleSheet(f"font-family:'{T.FONT}'; font-size:13px; font-weight:700;"
                           f" color:{T.TEXT}; background:transparent; border:none;")
-        lay.addWidget(top)
-        lay.addWidget(val)
+        text_col.addWidget(top)
+        text_col.addWidget(val)
+        lay.addLayout(text_col, 1)
         return box
 
     def _split_arrow_qss(self):
+        # Mismo gradiente vertical que PlayBtn (#f97316 → #ea580c) para que
+        # botón y flecha se vean como UNA sola pieza.
         return f"""
             QPushButton {{
-                background:{T.ACCENT};
+                background:qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                           stop:0 #f97316, stop:1 #ea580c);
                 color:#ffffff;
                 border:none;
-                border-left:1px solid {T.rgba("#ffffff", 0.35)};
-                border-top-right-radius:10px;
-                border-bottom-right-radius:10px;
+                border-left:1px solid {T.rgba("#ffffff", 0.22)};
+                border-top-right-radius:8px;
+                border-bottom-right-radius:8px;
                 font-family:'{T.FONT}';
-                font-size:16px;
+                font-size:13px;
                 font-weight:900;
             }}
-            QPushButton:hover {{ background:{T.ACCENT_HI}; }}
-            QPushButton:pressed {{ background:{T.ACCENT_LO}; }}
+            QPushButton:hover {{
+                background:qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                           stop:0 #fb923c, stop:1 #f97316);
+            }}
+            QPushButton:pressed {{
+                background:qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                                           stop:0 #ea580c, stop:1 #c2410c);
+            }}
         """
 
     def _utility_btn_qss(self):
@@ -1119,8 +1038,8 @@ class MainScreen(QWidget):
         return MODPACK_FORGE_VERSION.replace("1.20.1-", "")
 
     def _modpack_version_label(self):
-        version = getattr(self, "_current_version", "") or MODPACK_VERSION
-        return f"Modpack v{version}"
+        version = getattr(self, "_current_version", "")
+        return f"Modpack v{version}" if version else "Modpack"
 
     def _target_info(self):
         target = self._home_target
@@ -1136,33 +1055,51 @@ class MainScreen(QWidget):
             kind, version = target
             if kind == "installed":
                 return {
-                    "title": version,
-                    "profile": "Forge instalado",
-                    "version": version.split("-forge-", 1)[0],
-                    "mods": "Sin pack",
+                    "title": f"Forge {version.split('-forge-', 1)[-1]}",
+                    "profile": "Forge (sin el pack)",
+                    "version": f"Minecraft {version.split('-forge-', 1)[0]}",
+                    "mods": "Carpeta propia",
                     "forge": version.split("-forge-", 1)[-1] if "-forge-" in version else version,
                 }
+            vtype = game_launcher.version_type(version)
+            profile = {"snapshot": "Snapshot"}.get(vtype, "Antigua" if vtype.startswith("old") else "Vanilla")
             return {
                 "title": f"Minecraft {version}",
-                "profile": "Vanilla",
+                "profile": profile,
                 "version": version,
                 "mods": "Sin mods",
                 "forge": "No aplica",
             }
         return {
-            "title": "Version no disponible",
-            "profile": "Sin seleccion",
+            "title": "Versión no disponible",
+            "profile": "Sin selección",
             "version": "-",
             "mods": "-",
             "forge": "-",
         }
 
-    def _installed_mod_count_label(self):
+    def _health(self):
+        """
+        checker.install_health() cacheado unos segundos: la UI lo consultaba
+        5-6 veces por cada cambio de estado (cada vez listando la carpeta mods).
+        """
+        now = QDateTime.currentMSecsSinceEpoch()
+        if self._health_cache and now - self._health_cache[0] < 3000:
+            return self._health_cache[1]
         try:
-            count = checker.install_health()["have_count"]
-            return str(count) if count else "+340"
+            h = checker.install_health()
         except Exception:
-            return "+340"
+            h = None
+        self._health_cache = (now, h)
+        return h
+
+    def _invalidate_health(self):
+        self._health_cache = None
+
+    def _installed_mod_count_label(self):
+        h = self._health()
+        count = h["have_count"] if h else 0
+        return str(count) if count else "+340"
 
     def _modpack_health_status(self):
         if self._state == self.S_NONE:
@@ -1172,13 +1109,12 @@ class MainScreen(QWidget):
         if self._state == self.S_BUSY:
             return "Procesando archivos", T.INFO
         if self._state == self.S_ERROR:
-            return "Requiere atencion", T.ERROR
-        try:
-            h = checker.install_health()
-            if h["want_count"] and h["missing_count"]:
-                return f"Faltan {h['missing_count']} mods", T.WARN
-        except Exception:
-            pass
+            return "Requiere atención", T.ERROR
+        if self._state == self.S_CHECKING:
+            return "Verificando…", T.MUTED
+        h = self._health()
+        if h and h["want_count"] and h["missing_count"]:
+            return f"Faltan {h['missing_count']} mods", T.WARN
         return "Mods actualizados", T.OK
 
     def _last_session_text(self):
@@ -1198,28 +1134,21 @@ class MainScreen(QWidget):
         if hours < 24:
             return f"Hace {hours} h"
         days = hours // 24
-        return f"Hace {days} dias"
+        return "Hace 1 día" if days == 1 else f"Hace {days} días"
 
     def mark_session_started(self, target="modpack"):
         self._settings.setValue("game/last_session", QDateTime.currentDateTimeUtc().toString(Qt.ISODate))
         self._settings.setValue("game/last_target", str(target))
+        self._settings.sync()
         self._refresh_home_metrics()
 
-    def _toggle_versions_panel(self):
-        if not hasattr(self, "_home_versions_panel"):
-            return
-        visible = not self._home_versions_panel.isVisible()
-        self._home_versions_panel.setVisible(visible)
-        if hasattr(self, "_versions_toggle"):
-            self._versions_toggle.setText("▲" if visible else "▼")
-
     def _open_modpack_folder(self):
-        folder = paths.get_minecraft_dir()
+        # Abre la carpeta de juego del destino elegido (modpack o versión).
         try:
-            os.makedirs(folder, exist_ok=True)
-        except OSError:
-            pass
-        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+            folder = game_launcher.game_dir_for(self._home_target)
+        except Exception:
+            folder = paths.get_minecraft_dir()
+        self._open_folder(folder)
 
     def _refresh_home_metrics(self):
         info = self._target_info()
@@ -1234,121 +1163,44 @@ class MainScreen(QWidget):
         ):
             if hasattr(self, attr):
                 self._set_metric_value(getattr(self, attr), val)
-        # Métricas del panel lateral antiguo (si aún existieran)
-        for attr, val in (
-            ("_home_metric_version", info["version"]),
-            ("_home_metric_mods", info["mods"]),
-            ("_home_metric_ram", f"{self._ram_gb} GB"),
-            ("_home_metric_forge", info["forge"]),
-        ):
-            if hasattr(self, attr):
-                self._set_metric_value(getattr(self, attr), val)
-        if hasattr(self, "_home_selected_lbl"):
-            self._home_selected_lbl.setText(info["title"])
         if hasattr(self, "_info_ram"):
             self._info_ram.setText(self._ram_text())
 
-    def _make_home_chip(self, text, cb):
-        b = QPushButton(text)
-        b.setCheckable(True)
-        b.setCursor(Qt.PointingHandCursor)
-        b.clicked.connect(cb)
-        b.setStyleSheet(f"""
-            QPushButton {{
-                background: transparent;
-                color: {T.MUTED};
-                border: 1px solid {T.BORDER_HI};
-                border-radius: 12px;
-                padding: 4px 12px;
-                font-family:'{T.FONT}';
-                font-size: 11px;
-            }}
-            QPushButton:checked {{
-                background: {T.rgba(T.ACCENT,0.14)};
-                color: {T.ACCENT_HI};
-                border: 1px solid {T.rgba(T.ACCENT,0.4)};
-            }}
-        """)
-        return b
-
-    def _toggle_home_snap(self):
-        self._home_snap = self._home_chip_snap.isChecked()
-        self._reload_home_versions()
-
-    def _toggle_home_old(self):
-        self._home_old = self._home_chip_old.isChecked()
-        self._reload_home_versions()
-
-    def _reload_home_versions(self):
-        self._syncing_combo = True
-        self._home_version_combo.clear()
-        self._home_version_combo.addItem("Cargando versiones...", None)
-        self._home_version_combo.setEnabled(False)
-        self._syncing_combo = False
-        self._home_loader = _HomeVersionLoader(self._home_snap, self._home_old, self)
-        self._home_loader.loaded.connect(self._on_home_versions)
-        self._home_loader.start()
-
-    def _on_home_versions(self, versions, forge_versions):
-        self._syncing_combo = True
-        self._home_version_combo.clear()
-        self._home_version_combo.addItem(
-            f"ChafaLand Modpack Actual · Forge {MODPACK_FORGE_VERSION}",
-            "modpack"
-        )
-        for forge_id in forge_versions:
-            self._home_version_combo.addItem(f"Forge instalado · {forge_id}", ("installed", forge_id))
-        for idx, version in enumerate(versions):
-            prefix = "Ultima version" if idx == 0 else "Release"
-            self._home_version_combo.addItem(f"{prefix} · {version}", ("vanilla", version))
-        if self._home_version_combo.count() == 1:
-            self._home_version_combo.addItem("No se pudieron cargar versiones vanilla", None)
-        self._home_version_combo.setEnabled(True)
-        self._set_combo_to_target()
-        self._syncing_combo = False
-        self._populate_release_rows()
-
-    def _select_home_modpack(self):
-        self._home_target = "modpack"
-        self._set_combo_to_target()
-        self._refresh_home_card_style()
-        self._update_home_state()
-        self._populate_release_rows()
-
-    def _select_home_combo(self, _index):
-        if self._syncing_combo:
-            return
-        data = self._home_version_combo.currentData()
-        if data is None:
-            return
-        self._home_target = data
-        self._refresh_home_card_style()
-        self._update_home_state()
-        self._populate_release_rows()
-
-    def _set_combo_to_target(self):
-        if not hasattr(self, "_home_version_combo"):
-            return
-        old = self._syncing_combo
-        self._syncing_combo = True
-        for i in range(self._home_version_combo.count()):
-            if self._home_version_combo.itemData(i) == self._home_target:
-                self._home_version_combo.setCurrentIndex(i)
-                self._syncing_combo = old
-                return
-        if self._home_version_combo.count():
-            self._home_version_combo.setCurrentIndex(0)
-        self._syncing_combo = old
-
     def _refresh_home_card_style(self):
         on = self._home_target == "modpack"
+        style = (on, self._home_target)
+        if getattr(self, "_card_style_key", None) == style:
+            return
+        self._card_style_key = style
+        accent = T.ACCENT if on else T.INFO
         self._home_modpack_card.setStyleSheet(f"""
             QFrame#homeModpackCard {{
-                background: {T.rgba(T.CARD_HI, 0.92) if on else T.rgba(T.CARD, 0.72)};
-                border: 1px solid {T.rgba(T.ACCENT, 0.70) if on else T.BORDER};
+                background: {T.rgba(T.CARD_HI, 0.92)};
+                border: 1px solid {T.rgba(accent, 0.70)};
                 border-radius: 8px;
             }}
         """)
+        # Ícono: logo del pack, o un bloque para versiones sueltas.
+        if hasattr(self, "_home_icon_box"):
+            if on:
+                px = QPixmap(get_logo(self._resource_fn))
+                if not px.isNull():
+                    self._home_icon_box.setPixmap(
+                        px.scaled(50, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            else:
+                self._home_icon_box.setPixmap(make_icon("cube", 44, T.INFO).pixmap(44, 44))
+            self._home_icon_box.setStyleSheet(
+                f"font-family:'{T.FONT}'; font-size:17px; font-weight:900; color:{accent};"
+                f" background:{T.rgba(accent, 0.10)}; border:1px solid {T.rgba(accent, 0.70)};"
+                " border-radius:10px;")
+        self._home_modpack_card.setToolTip("" if on else "Clic para volver al ChafaLand Modpack")
+        self._home_modpack_card.setCursor(Qt.ArrowCursor if on else Qt.PointingHandCursor)
+        if hasattr(self, "_open_folder_btn"):
+            self._open_folder_btn.setText("Carpeta del modpack" if on else "Carpeta de la versión")
+            try:
+                self._open_folder_btn.setToolTip(game_launcher.game_dir_for(self._home_target))
+            except Exception:
+                pass
 
     def _badge_qss(self, color):
         return f"""
@@ -1375,75 +1227,86 @@ class MainScreen(QWidget):
             return "REINTENTAR", T.ERROR, "install"
         return "ACTUAL", T.OK, "play"
 
+    def _target_installed(self):
+        """¿La versión suelta elegida ya está descargada?"""
+        target = self._home_target
+        if not isinstance(target, tuple):
+            return True
+        vid = target[1]
+        return os.path.isfile(os.path.join(paths.get_minecraft_dir(), "versions", vid, f"{vid}.json"))
+
+    def _set_label_color(self, label, color, size=12):
+        label.setStyleSheet(f"font-family:'{T.FONT}'; font-size:{size}px; color:{color};"
+                            " background:transparent;")
+
     def _update_home_state(self):
         if not hasattr(self, "_main_btn"):
             return
 
+        on_modpack = self._home_target == "modpack"
         badge, color, mode = self._home_modpack_label()
         health_text, health_color = self._modpack_health_status()
-        if self._home_target != "modpack":
-            badge, color = "SELECCIONADA", T.INFO
+        installed = self._target_installed()
+        if not on_modpack:
+            badge, color = ("INSTALADA", T.INFO) if installed else ("SE DESCARGARÁ", T.ACCENT_HI)
         elif health_color == T.WARN and self._state == self.S_READY:
             badge, color = "FALTA ACTUALIZAR", T.WARN
         self._home_badge.setText(badge)
         self._home_badge.setStyleSheet(self._badge_qss(color))
 
-        if self._home_target == "modpack":
-            status_text = health_text
-        else:
-            status_text = "Version seleccionada"
-        if hasattr(self, "_home_modpack_status"):
-            self._home_modpack_status.setText(status_text)
-            self._home_modpack_status.setStyleSheet(
-                f"font-family:'{T.FONT}'; font-size:11px; color:{health_color};"
-                " background:transparent;"
-            )
-
         ready_line = (
             "Listo para jugar"
             if self._state == self.S_READY and health_text == "Mods actualizados"
-            else status_text
+            else health_text
         )
-        if hasattr(self, "_home_meta_line"):
-            if self._home_target == "modpack":
-                self._home_meta_line.setText(
-                    f"<span style='color:{T.TEXT2};'>⚒ Forge 1.20.1</span>"
-                    f"<span style='color:{T.MUTED};'>  ·  </span>"
-                    f"<span style='color:{T.TEXT2};'>▣ {self._installed_mod_count_label()} mods</span>"
-                    f"<span style='color:{T.MUTED};'>  ·  </span>"
-                    f"<span style='color:{health_color};'>✓ {ready_line}</span>"
-                )
-            else:
-                info = self._target_info()
-                self._home_meta_line.setText(
-                    f"<span style='color:{T.TEXT2};'>Minecraft {info['version']}</span>"
-                    f"<span style='color:{T.MUTED};'>  ·  </span>"
-                    f"<span style='color:{T.TEXT2};'>{info['mods']}</span>"
-                    f"<span style='color:{T.MUTED};'>  ·  </span>"
-                    f"<span style='color:{T.INFO};'>✓ Version seleccionada</span>"
-                )
+        info = self._target_info()
+        if on_modpack:
+            self._home_meta_forge_icon.setIcon("anvil", T.MUTED)
+            self._home_meta_forge_text.setText("Forge 1.20.1")
+            self._home_meta_mods_icon.setIcon("puzzle", T.MUTED)
+            self._home_meta_mods_text.setText(f"{self._installed_mod_count_label()} mods")
+            self._home_meta_ready_icon.setIcon(
+                "check-circle" if health_color not in (T.WARN, T.ERROR) else "warning",
+                health_color,
+            )
+            self._home_meta_ready_text.setText(ready_line)
+            self._set_label_color(self._home_meta_ready_text, health_color)
+        else:
+            self._home_meta_forge_icon.setIcon("cube", T.MUTED)
+            self._home_meta_forge_text.setText(info["profile"])
+            self._home_meta_mods_icon.setIcon("folder", T.MUTED)
+            self._home_meta_mods_text.setText("Carpeta independiente")
+            self._home_meta_ready_icon.setIcon("check-circle" if installed else "download", T.INFO)
+            self._home_meta_ready_text.setText("Lista para jugar" if installed else "Se instala al jugar")
+            self._set_label_color(self._home_meta_ready_text, T.INFO)
 
-        if hasattr(self, "_home_action_hint"):
-            if self._home_target != "modpack":
-                info = self._target_info()
-                hint = f"Estado actual: {info['title']}. Se iniciara esta version sin el modpack."
-            elif self._state == self.S_NONE:
-                hint = "Instala el modpack oficial antes de iniciar Minecraft."
-            elif self._state == self.S_UPDATE:
-                hint = "Hay una actualizacion disponible. Se recomienda actualizar antes de jugar."
-            elif self._state == self.S_BUSY:
-                hint = "El launcher esta preparando los archivos necesarios."
-            elif self._state == self.S_ERROR:
-                hint = "Revisa el log inferior y reintenta la verificacion o instalacion."
-            elif self._account_mode == "premium":
-                hint = "Perfil premium detectado. JUGAR abre el launcher oficial."
-            elif health_color == T.WARN:
-                hint = f"{health_text}. Ejecuta la actualizacion para sincronizar el modpack."
+        premium = self._account_mode == "premium"
+        if not on_modpack:
+            if premium:
+                hint = "Con cuenta premium esta versión se juega desde el launcher oficial."
+            elif installed:
+                hint = "Se juega en su propia carpeta: no usa los mods ni los mundos del modpack."
             else:
-                hint = "Todo actualizado. Puedes iniciar el modpack oficial."
-            self._home_action_hint.setText(hint)
+                hint = "Se descarga la primera vez (unos minutos) y usa su propia carpeta, sin el modpack."
+        elif self._state == self.S_NONE:
+            hint = "Instala el modpack oficial antes de iniciar Minecraft."
+        elif self._state == self.S_UPDATE:
+            hint = "Hay una actualización disponible. Se recomienda actualizar antes de jugar."
+        elif self._state == self.S_BUSY:
+            hint = "El launcher está preparando los archivos necesarios."
+        elif self._state == self.S_ERROR:
+            hint = "Algo falló. Revisa el registro (⋯ → Ver progreso) y pulsa REINTENTAR."
+        elif self._state == self.S_CHECKING:
+            hint = "Comprobando la instalación del modpack…"
+        elif premium:
+            hint = "Perfil premium: JUGAR abre el launcher oficial de Minecraft."
+        elif health_color == T.WARN:
+            hint = f"{health_text}. Usa ACTUALIZAR o Ajustes → Reparar para completarlo."
+        else:
+            hint = "Todo actualizado. ¡A jugar!"
+        self._home_action_hint.setText(hint)
 
-        if self._account_mode == "premium" and self._state == self.S_READY:
+        if premium and self._state == self.S_READY and on_modpack:
             self._home_notice.setText("Cuenta premium detectada: JUGAR abre el launcher oficial.")
             self._home_notice.show()
         else:
@@ -1452,34 +1315,48 @@ class MainScreen(QWidget):
         self._sec_btn.hide()
 
         busy = self._state in (self.S_CHECKING, self.S_BUSY)
-        if self._home_target == "modpack":
-            if self._state == self.S_CHECKING:
-                text = "VERIFICANDO..."
-            elif self._state == self.S_BUSY:
-                text = "PROCESANDO..."
-            elif self._state == self.S_NONE:
-                text = "INSTALAR"
-            elif self._state == self.S_UPDATE:
-                text = "ACTUALIZAR"
-            elif self._state == self.S_ERROR:
-                text = "REINTENTAR"
-            else:
-                text = "JUGAR"
+        if on_modpack:
+            text = {
+                self.S_CHECKING: "VERIFICANDO...",
+                self.S_BUSY: "PROCESANDO...",
+                self.S_NONE: "INSTALAR",
+                self.S_UPDATE: "ACTUALIZAR",
+                self.S_ERROR: "REINTENTAR",
+            }.get(self._state, "JUGAR")
             self._main_btn.setMode(mode)
             self._main_btn.setEnabled(not busy)
             self._main_btn.setText(text)
         else:
             self._main_btn.setMode("play")
-            self._main_btn.setText("JUGAR")
+            self._main_btn.setText("PROCESANDO..." if self._state == self.S_BUSY else "JUGAR")
             self._main_btn.setEnabled(not busy)
+
+        # Si Minecraft ya está corriendo, no dejar relanzar.
+        if getattr(self, "_game_running", False) and not busy:
+            self._main_btn.setMode("play")
+            self._main_btn.setText("EN EJECUCIÓN")
+            self._main_btn.setEnabled(False)
+
+        if getattr(self, "_recovery_required", False):
+            self._home_badge.setText("RECUPERACIÓN")
+            self._home_badge.setStyleSheet(self._badge_qss(T.ERROR))
+            self._main_btn.setMode("install")
+            self._main_btn.setText("REVISAR RESPALDO")
+            self._main_btn.setEnabled(False)
+            self._home_action_hint.setText(
+                "No inicies ni reinstales hasta revisar el respaldo indicado en Ajustes."
+            )
 
         if busy:
             self._chk_spin.start()
         else:
             self._chk_spin.stop()
+        if hasattr(self, "_version_list"):
+            self._version_list.set_modpack_badge(*self._modpack_list_badge())
         self._refresh_home_card_style()
         self._refresh_account_badge()
         self._refresh_home_metrics()
+        self._refresh_java_label()
 
     def home_target(self):
         return self._home_target
@@ -1548,7 +1425,8 @@ class MainScreen(QWidget):
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
         self._modpack_status_lbl = QLabel("Verificando archivos")
-        self._modpack_status_lbl.setStyleSheet(f"font-family:'{T.FONT_MONO}'; font-size:9px;"
+        self._modpack_status_lbl.setWordWrap(True)
+        self._modpack_status_lbl.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px;"
                                                f" color:{T.MUTED}; background:transparent; border:none;")
         self._modpack_pct_lbl = QLabel("")
         self._modpack_pct_lbl.setStyleSheet(f"font-family:'{T.FONT_MONO}'; font-size:9px;"
@@ -1574,10 +1452,10 @@ class MainScreen(QWidget):
 
         if self._state == self.S_NONE:
             text, badge, color, mode, enabled = "INSTALAR", "NO INSTALADO", T.INFO, "install", True
-            status = "Primera instalacion"
+            status = "Primera instalación"
         elif self._state == self.S_UPDATE:
-            text, badge, color, mode, enabled = "ACTUALIZAR", "UPDATE", T.INFO2, "update", True
-            status = "Actualizacion disponible"
+            text, badge, color, mode, enabled = "ACTUALIZAR", "ACTUALIZAR", T.INFO2, "update", True
+            status = "Actualización disponible"
         elif self._state == self.S_READY:
             text, badge, color, mode, enabled = "JUGAR", "LISTO", T.ACCENT_HI, "play", True
             status = "Listo para jugar"
@@ -1598,6 +1476,30 @@ class MainScreen(QWidget):
         self._modpack_card_badge.setStyleSheet(self._badge_qss(color))
         self._modpack_status_lbl.setText(status)
 
+        if getattr(self, "_game_running", False) and self._state == self.S_READY:
+            self._modpack_action_btn.setText("EN EJECUCIÓN")
+            self._modpack_action_btn.setEnabled(False)
+            self._modpack_status_lbl.setText("Minecraft en ejecución")
+
+        if getattr(self, "_recovery_required", False):
+            self._modpack_action_btn.setText("REVISAR RESPALDO")
+            self._modpack_action_btn.setEnabled(False)
+            self._modpack_card_badge.setText("RECUPERACIÓN")
+            self._modpack_card_badge.setStyleSheet(self._badge_qss(T.ERROR))
+            self._modpack_status_lbl.setText("Recuperación manual necesaria")
+
+    def set_game_running(self, running):
+        """Llamado desde MainWindow: bloquea/desbloquea Jugar según si el
+        juego sigue vivo."""
+        self._game_running = bool(running)
+        self._update_home_state()
+        self._update_modpack_page_state()
+        self._refresh_repair_button()
+        if self._game_running:
+            self.append_log("🎮 Minecraft en ejecución — Jugar bloqueado hasta que cierres el juego.")
+        else:
+            self.append_log("✅ Minecraft cerrado — ya puedes volver a jugar.")
+
     def _on_modpack_action(self):
         if self._state in (self.S_NONE, self.S_ERROR):
             self.request_action.emit("install")
@@ -1614,44 +1516,44 @@ class MainScreen(QWidget):
         self._update_home_state()
 
     def _refresh_account_badge(self):
-        if not hasattr(self, "_home_account_lbl"):
+        if not hasattr(self, "_account_summary"):
             return
         acc = self._account
         if not acc:
-            self._home_account_lbl.setText("Perfil: no cargado")
-            return
-        mode = "Premium" if getattr(acc, "mode", "") == "premium" else "No premium"
-        self._home_account_lbl.setText(f"Perfil: {acc.username} · {mode}")
+            text = "Sin cuenta configurada."
+        elif getattr(acc, "mode", "") == "premium":
+            text = "Cuenta premium: JUGAR abre el launcher oficial de Minecraft."
+        else:
+            text = f"Jugando como <b>{acc.username}</b> · modo offline (no premium)."
+        self._account_summary.setText(text)
 
-    def _build_ajustes_page_legacy(self):
-        page = QWidget(); page.setStyleSheet("background:transparent;")
-        lay = QVBoxLayout(page); lay.setContentsMargins(52, 22, 52, 22); lay.setSpacing(0)
-        title = QLabel("AJUSTES")
-        title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:26px; font-weight:900;"
-                           f" color:{T.TEXT}; letter-spacing:2px;")
-        lay.addWidget(title)
-        sub = QLabel("Configuración del launcher")
-        sub.setStyleSheet(f"font-family:'{T.FONT}'; font-size:12px; color:{T.MUTED};")
-        lay.addWidget(sub); lay.addSpacing(20)
-
-        card = QFrame()
-        card.setStyleSheet(f"QFrame {{ background:{T.rgba(T.CARD,0.65)};"
-                          f" border:1px solid {T.BORDER}; border-radius:14px; }}")
-        cv = QVBoxLayout(card); cv.setContentsMargins(20, 24, 20, 24)
-        msg = QLabel("⚙  Próximamente —  opciones del launcher.")
-        msg.setStyleSheet(f"font-family:'{T.FONT}'; font-size:13px; color:{T.TEXT2};")
-        cv.addWidget(msg)
-        lay.addWidget(card); lay.addStretch()
-        return page
-
-
-
-    # ── Visor ─────────────────────────────────────────────────────
+    # ── Página AJUSTES ────────────────────────────────────────────
     def _build_ajustes_page(self):
         page = QWidget()
         page.setStyleSheet("background:transparent;")
 
-        lay = QVBoxLayout(page)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"""
+            QScrollArea {{ background:transparent; border:none; }}
+            QScrollArea > QWidget > QWidget {{ background:transparent; }}
+            QScrollBar:vertical {{ background:transparent; width:8px; margin:2px; }}
+            QScrollBar::handle:vertical {{
+                background:{T.BORDER_HI}; border-radius:4px; min-height:24px;
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{ height:0; }}
+        """)
+
+        content = QWidget()
+        content.setStyleSheet("background:transparent;")
+        lay = QVBoxLayout(content)
         lay.setContentsMargins(52, 22, 52, 22)
         lay.setSpacing(14)
 
@@ -1662,7 +1564,7 @@ class MainScreen(QWidget):
         )
         lay.addWidget(title)
 
-        sub = QLabel("Configuracion del launcher")
+        sub = QLabel("Configuración del launcher")
         sub.setStyleSheet(
             f"font-family:'{T.FONT}'; font-size:12px; color:{T.MUTED};"
         )
@@ -1700,7 +1602,118 @@ class MainScreen(QWidget):
         ram_row.addWidget(self._ram_selector)
 
         rv.addLayout(ram_row)
+        total = total_ram_gb()
+        ram_hint = QLabel(
+            (f"Tu PC tiene {total} GB. " if total else "")
+            + "Recomendado: 6–8 GB para el modpack, 2–4 GB para vanilla. "
+            "Asignar de más no acelera el juego y puede trabar Windows."
+        )
+        ram_hint.setWordWrap(True)
+        ram_hint.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:10px; color:{T.MUTED};"
+            " background:transparent; border:none;"
+        )
+        rv.addWidget(ram_hint)
         lay.addWidget(ram_card)
+
+        # ── CARD CUENTA ───────────────────────────────────────────
+        account_card = QFrame()
+        account_card.setStyleSheet(self._settings_card_qss())
+        av = QVBoxLayout(account_card)
+        av.setContentsMargins(20, 18, 20, 18)
+        av.setSpacing(10)
+        account_title = QLabel("CUENTA")
+        account_title.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:13px; font-weight:900;"
+            f" color:{T.TEXT}; background:transparent; border:none;"
+        )
+        av.addWidget(account_title)
+        account_row = QHBoxLayout()
+        account_row.setSpacing(12)
+        self._account_summary = QLabel("")
+        self._account_summary.setWordWrap(True)
+        self._account_summary.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:12px; color:{T.TEXT2};"
+            " background:transparent; border:none;"
+        )
+        account_row.addWidget(self._account_summary, 1)
+        self._switch_account_btn = QPushButton("Cambiar cuenta")
+        self._switch_account_btn.setCursor(Qt.PointingHandCursor)
+        self._switch_account_btn.setStyleSheet(self._ghost_btn_qss())
+        self._switch_account_btn.clicked.connect(lambda: self.request_action.emit("switch_account"))
+        account_row.addWidget(self._switch_account_btn)
+        av.addLayout(account_row)
+        lay.addWidget(account_card)
+
+        # ── CARD MANTENIMIENTO ────────────────────────────────────
+        self._repair_card = QFrame()
+        self._repair_card.setStyleSheet(self._settings_card_qss())
+
+        maintenance = QVBoxLayout(self._repair_card)
+        maintenance.setContentsMargins(20, 18, 20, 18)
+        maintenance.setSpacing(10)
+
+        repair_title = QLabel("MANTENIMIENTO")
+        repair_title.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:13px; font-weight:900;"
+            f" color:{T.TEXT}; background:transparent; border:none;"
+        )
+        maintenance.addWidget(repair_title)
+
+        repair_desc = QLabel(
+            "Reinstala el modpack desde cero para corregir archivos dañados "
+            "o conflictos entre mods."
+        )
+        repair_desc.setWordWrap(True)
+        repair_desc.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:12px; color:{T.TEXT2};"
+            " background:transparent; border:none;"
+        )
+        maintenance.addWidget(repair_desc)
+
+        repair_safety = QLabel(
+            "Primero se descarga y valida el paquete. Tus mundos y tu perfil "
+            "se conservan, y la instalación anterior queda respaldada."
+        )
+        repair_safety.setWordWrap(True)
+        repair_safety.setStyleSheet(
+            f"font-family:'{T.FONT}'; font-size:10px; color:{T.MUTED};"
+            f" background:{T.rgba(T.INFO, 0.07)};"
+            f" border:1px solid {T.rgba(T.INFO, 0.18)}; border-radius:7px;"
+            " padding:8px 10px;"
+        )
+        maintenance.addWidget(repair_safety)
+
+        self._repair_backup_lbl = QLabel("")
+        self._repair_backup_lbl.setWordWrap(True)
+        self._repair_backup_lbl.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._repair_backup_lbl.setStyleSheet(
+            f"font-family:'{T.FONT_MONO}'; font-size:9px; color:{T.MUTED};"
+            " background:transparent; border:none;"
+        )
+        self._repair_backup_lbl.hide()
+        maintenance.addWidget(self._repair_backup_lbl)
+
+        repair_actions = QHBoxLayout()
+        repair_actions.setSpacing(10)
+
+        self._repair_btn = QPushButton("REPARAR INSTALACIÓN")
+        self._repair_btn.setCursor(Qt.PointingHandCursor)
+        self._repair_btn.setStyleSheet(self._repair_btn_qss())
+        self._repair_btn.clicked.connect(self._on_repair_clicked)
+
+        self._repair_backup_btn = QPushButton("ABRIR ÚLTIMO RESPALDO")
+        self._repair_backup_btn.setCursor(Qt.PointingHandCursor)
+        self._repair_backup_btn.setStyleSheet(self._ghost_btn_qss())
+        self._repair_backup_btn.clicked.connect(self._open_last_repair_backup)
+        self._repair_backup_btn.hide()
+
+        repair_actions.addWidget(self._repair_btn)
+        repair_actions.addWidget(self._repair_backup_btn)
+        repair_actions.addStretch()
+        maintenance.addLayout(repair_actions)
+
+        lay.addWidget(self._repair_card)
 
         # ── CARD PERFIL NO PREMIUM ─────────────────────────────────
         self._offline_card = QFrame()
@@ -1815,6 +1828,10 @@ class MainScreen(QWidget):
         lay.addStretch()
 
         self._refresh_account_settings()
+        self._refresh_repair_button()
+
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
 
         return page
 
@@ -1860,7 +1877,7 @@ class MainScreen(QWidget):
         self._set_ram_value(self.ram_gb() + 1)
 
     def _set_ram_value(self, value):
-        value = max(2, min(16, int(value)))
+        value = max(2, min(self._max_ram, int(value)))
         self._on_ram_changed(value)
 
     def _refresh_ram_selector(self):
@@ -1873,7 +1890,10 @@ class MainScreen(QWidget):
             self._ram_minus_btn.setEnabled(value > 2)
 
         if hasattr(self, "_ram_plus_btn"):
-            self._ram_plus_btn.setEnabled(value < 16)
+            self._ram_plus_btn.setEnabled(value < self._max_ram)
+            self._ram_plus_btn.setToolTip(
+                "" if value < self._max_ram else
+                f"Máximo recomendado para tu PC: {self._max_ram} GB")
 
     def _ram_selector_qss(self):
         return f"""
@@ -1952,71 +1972,6 @@ class MainScreen(QWidget):
             QLineEdit:focus {{ border-color:{T.ACCENT}; }}
         """
 
-    def _spin_qss(self):
-        return f"""
-        QSpinBox {{
-            font-family: '{T.FONT}';
-            font-size: 12px;
-            font-weight: 800;
-            color: {T.TEXT};
-            background-color: #090E14;
-            border: 1px solid #2A3442;
-            border-radius: 8px;
-            padding-left: 12px;
-            padding-right: 42px;
-            min-height: 40px;
-            selection-background-color: #FF7A1A;
-        }}
-
-        QSpinBox:hover {{
-            border: 1px solid #3A4656;
-        }}
-
-        QSpinBox:focus {{
-            border: 1px solid #FF7A1A;
-        }}
-
-        QSpinBox::up-button {{
-            subcontrol-origin: border;
-            subcontrol-position: top right;
-            width: 34px;
-            height: 20px;
-            background-color: #101722;
-            border-left: 1px solid #2A3442;
-            border-top-right-radius: 8px;
-        }}
-
-        QSpinBox::down-button {{
-            subcontrol-origin: border;
-            subcontrol-position: bottom right;
-            width: 34px;
-            height: 20px;
-            background-color: #101722;
-            border-left: 1px solid #2A3442;
-            border-bottom-right-radius: 8px;
-        }}
-
-        QSpinBox::up-button:hover,
-        QSpinBox::down-button:hover {{
-            background-color: #FF7A1A;
-        }}
-
-        QSpinBox::up-button:pressed,
-        QSpinBox::down-button:pressed {{
-            background-color: #D96100;
-        }}
-
-        QSpinBox::up-arrow {{
-            width: 9px;
-            height: 9px;
-        }}
-
-        QSpinBox::down-arrow {{
-            width: 9px;
-            height: 9px;
-        }}
-        """
-
     def _combo_qss(self):
         return f"""
             QComboBox {{
@@ -2069,9 +2024,139 @@ class MainScreen(QWidget):
             QPushButton:hover {{ background:{T.CARD_HI}; color:{T.TEXT}; }}
         """
 
+    def _repair_btn_qss(self):
+        return f"""
+            QPushButton {{
+                background:{T.rgba(T.ERROR, 0.10)};
+                color:{T.ERROR};
+                border:1px solid {T.rgba(T.ERROR, 0.45)};
+                border-radius:8px;
+                padding:10px 16px;
+                font-family:'{T.FONT}';
+                font-size:12px;
+                font-weight:800;
+            }}
+            QPushButton:hover {{
+                background:{T.rgba(T.ERROR, 0.18)};
+                border-color:{T.ERROR};
+            }}
+            QPushButton:disabled {{
+                background:{T.rgba(T.ERROR, 0.04)};
+                color:{T.DIM};
+                border-color:{T.BORDER};
+            }}
+        """
+
+    def _refresh_repair_button(self):
+        if not hasattr(self, "_repair_btn"):
+            return
+        checking_or_busy = self._state in (
+            self.S_CHECKING, self.S_BUSY, self.S_NONE
+        )
+        game_running = bool(getattr(self, "_game_running", False))
+        recovery_required = bool(getattr(self, "_recovery_required", False))
+        self._repair_btn.setEnabled(
+            not checking_or_busy and not game_running and not recovery_required
+        )
+
+        if recovery_required:
+            hint = "Revisa y recupera manualmente el respaldo antes de continuar."
+        elif self._state == self.S_BUSY:
+            hint = "Espera a que termine la operación actual."
+        elif self._state == self.S_CHECKING:
+            hint = "Disponible cuando termine la verificación."
+        elif self._state == self.S_NONE:
+            hint = "Primero instala el modpack; todavía no hay una instalación que reparar."
+        elif game_running:
+            hint = "Cierra Minecraft antes de reparar la instalación."
+        else:
+            hint = "Reinstala el modpack conservando mundos, perfil y un respaldo."
+        self._repair_btn.setToolTip(hint)
+
+    def _on_repair_clicked(self):
+        if self._state in (self.S_CHECKING, self.S_BUSY, self.S_NONE):
+            return
+        if getattr(self, "_recovery_required", False):
+            return
+        if getattr(self, "_game_running", False):
+            QMessageBox.information(
+                self,
+                "Reparar instalación",
+                "Cierra Minecraft antes de reparar la instalación.",
+            )
+            return
+
+        mc_dir = os.path.abspath(paths.get_minecraft_dir())
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Reparar instalación")
+        dialog.setText("¿Quieres reinstalar completamente el modpack?")
+        dialog.setInformativeText(
+            "Carpeta que se reemplazará:\n"
+            f"{mc_dir}\n\n"
+            "Primero se descargará y validará el paquete. Se conservarán tus "
+            "mundos, tu perfil y tus skins, y la instalación anterior quedará "
+            "disponible como respaldo.\n\n"
+            "Necesitarás espacio para la descarga y las dos instalaciones; "
+            "el respaldo puede ocupar varios GB."
+        )
+        repair_button = dialog.addButton(
+            "REPARAR INSTALACIÓN", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_button = dialog.addButton(
+            "Cancelar", QMessageBox.ButtonRole.RejectRole
+        )
+        dialog.setDefaultButton(cancel_button)
+        dialog.setEscapeButton(cancel_button)
+        dialog.exec()
+
+        if dialog.clickedButton() is repair_button:
+            self.request_action.emit("repair")
+
+    def set_last_repair_backup(self, backup_path):
+        """Muestra el respaldo creado y habilita abrirlo desde Ajustes."""
+        raw = str(backup_path or "").strip()
+        self._last_repair_backup = os.path.abspath(raw) if raw else ""
+
+        if not hasattr(self, "_repair_backup_btn"):
+            return
+        visible = bool(self._last_repair_backup)
+        self._repair_backup_btn.setVisible(visible)
+        self._repair_backup_lbl.setVisible(visible)
+        if visible:
+            self._repair_backup_lbl.setText(
+                f"Último respaldo: {self._last_repair_backup}"
+            )
+        else:
+            self._repair_backup_lbl.clear()
+
+    def set_recovery_required(self, backup_path=""):
+        """Bloquea acciones que podrían sobrescribir una recuperación fallida."""
+        self._recovery_required = True
+        self.set_last_repair_backup(backup_path)
+        self._update_home_state()
+        self._update_modpack_page_state()
+        self._refresh_repair_button()
+        self.set_status_text("Recuperación manual necesaria")
+        self.append_log(
+            "⛔ Acciones bloqueadas: revisa el respaldo antes de continuar."
+        )
+
+    def _open_last_repair_backup(self):
+        path = getattr(self, "_last_repair_backup", "")
+        if not path or not os.path.isdir(path):
+            QMessageBox.warning(
+                self,
+                "Respaldo no disponible",
+                "La carpeta del último respaldo ya no existe.",
+            )
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
+
     def _on_ram_changed(self, value):
-        self._ram_gb = max(2, min(16, int(value)))
+        self._ram_gb = max(2, min(self._max_ram, int(value)))
         self._settings.setValue("game/ram_gb", self._ram_gb)
+        self._settings.sync()
 
         if hasattr(self, "_ram_value_lbl"):
             self._refresh_ram_selector()
@@ -2079,7 +2164,7 @@ class MainScreen(QWidget):
         self._refresh_home_metrics()
 
     def ram_gb(self):
-        return max(2, min(16, int(self._ram_gb or 6)))
+        return max(2, min(self._max_ram, int(self._ram_gb or 6)))
 
     def set_account(self, account):
         self._account = account
@@ -2151,7 +2236,7 @@ class MainScreen(QWidget):
             return
         img = QImage(path)
         if img.isNull() or img.width() < 64 or img.height() < 32:
-            QMessageBox.warning(self, "CFL Launcher", "PNG invalido. Usa una skin de 64x64 o 64x32.")
+            QMessageBox.warning(self, "CFL Launcher", "PNG inválido. Usa una skin de 64x64 o 64x32.")
             return
         self._pending_skin_path = path
         self._set_settings_skin(path)
@@ -2162,13 +2247,13 @@ class MainScreen(QWidget):
             return
         name = self._settings_name.text().strip()
         if not accounts.is_valid_name(name):
-            QMessageBox.warning(self, "CFL Launcher", "Usa 3-16 caracteres: letras, numeros o _")
+            QMessageBox.warning(self, "CFL Launcher", "Usa 3-16 caracteres: letras, números o _")
             return
         if name != acc.username:
             ans = QMessageBox.question(
                 self,
                 "Cambiar nombre",
-                "Cambiar el nombre puede separar tu progreso en servidores offline. Guardar de todos modos?",
+                "Cambiar el nombre puede separar tu progreso en servidores offline. ¿Guardar de todos modos?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -2196,7 +2281,7 @@ class MainScreen(QWidget):
         ans = QMessageBox.question(
             self,
             "Restaurar perfil",
-            f"Restaurar el perfil '{profile.username}' con su UUID offline anterior?",
+            f"¿Restaurar el perfil '{profile.username}' con su UUID offline anterior?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.Yes,
         )
@@ -2220,148 +2305,90 @@ class MainScreen(QWidget):
         self._nav_cfg.setActive(idx == 3)
         name = {0: "INICIO", 1: "MODPACKS", 2: "MODS", 3: "AJUSTES"}[idx]
         self._bread.setText("CFL LAUNCHER  /  " + name)
+        # El panel de progreso solo vive en Inicio; en otras páginas no tapa nada.
+        if idx == 0:
+            self._show_progress_overlay()
+        elif hasattr(self, "_progress_overlay"):
+            self._progress_overlay.hide()
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
         if hasattr(self, "_lightbox") and self._lightbox.isVisible():
             self._lightbox.setGeometry(self.rect())
         self._position_progress_overlay()
+        # Banner de Inicio adaptable: en ventanas bajas cede espacio a la lista.
+        if hasattr(self, "_home_banner"):
+            h = self.height()
+            banner_h = 170 if h >= 860 else 140 if h >= 720 else 104
+            self._home_banner.setFixedHeight(banner_h)
+            self._hero_sub.setVisible(banner_h >= 130)
+            size = 28 if banner_h >= 130 else 22
+            self._hero_title.setStyleSheet(f"font-family:'{T.FONT}'; font-size:{size}px;"
+                                           " font-weight:900; color:#ffffff; background:transparent;")
 
     # ── Máquina de estados ────────────────────────────────────────
     def set_state(self, state, remote_version=""):
+        changed = state != self._state
         self._state = state
-        if remote_version:
-            self._current_version = remote_version
+        self._invalidate_health()
+        if state != self.S_BUSY:
+            self._busy_text = ""
 
         if state == self.S_CHECKING:
-
-            self._main_btn.setText("VERIFICANDO...")
-            self._main_btn.setMode("play")
-            self._main_btn.setEnabled(False)
-
-            self._sec_btn.setText("...")
-            self._sec_btn.setEnabled(False)
-
-            self._chk_spin.start()
             self._set_st("VERIFICANDO ARCHIVOS", T.ACCENT_HI)
 
         elif state == self.S_NONE:
-
-            self._main_btn.setText("INSTALAR MODPACK")
-            self._main_btn.setMode("install")
-            self._main_btn.setEnabled(True)
-
-            self._sec_btn.hide()
-
-            self._chk_spin.stop()
-
             self._set_st("PRIMERA INSTALACIÓN", T.INFO)
-
-            self._log.append_log(
-                "🆕 Modpack no instalado — pulsa INSTALAR MODPACK para comenzar"
-            )
+            if changed:
+                self._log.append_log(
+                    "🆕 Modpack no instalado — pulsa INSTALAR para comenzar"
+                )
 
         elif state == self.S_UPDATE:
-
-            self._main_btn.setText("ACTUALIZAR MODPACK")
-            self._main_btn.setMode("update")
-            self._main_btn.setEnabled(True)
-
-            self._sec_btn.setText("JUGAR IGUAL")
-            self._sec_btn.show()
-            self._sec_btn.setEnabled(True)
-
-            self._chk_spin.stop()
-
-            self._set_st(
-                "ACTUALIZACIÓN DISPONIBLE",
-                T.INFO2
-            )
-
+            self._set_st("ACTUALIZACIÓN DISPONIBLE", T.INFO2)
             if remote_version:
-                self._ver_badge.setText(
-                    f"Versión disponible v{remote_version}"
+                self._ver_badge.setText(f"Nueva versión v{remote_version}")
+                self._ver_badge.setStyleSheet(self._ver_badge_qss(T.INFO2))
+            if changed:
+                self._log.append_log(
+                    "⬆️ Hay una actualización disponible. Se recomienda actualizar antes de iniciar."
                 )
-
-                self._ver_badge.setStyleSheet(
-                    f"""
-                    font-family:'{T.FONT_MONO}';
-                    font-size:10px;
-                    color:{T.INFO2};
-                    background:{T.rgba(T.INFO2, 0.09)};
-                    border:1px solid {T.rgba(T.INFO2, 0.25)};
-                    border-radius:4px;
-                    padding:3px 10px;
-                    """
-                )
-
-            self._log.append_log(
-                "⬆️ Hay una actualización disponible. Se recomienda actualizar antes de iniciar."
-            )
 
         elif state == self.S_READY:
-
-            self._main_btn.setText("JUGAR")
-            self._main_btn.setMode("play")
-            self._main_btn.setEnabled(True)
-
-            self._sec_btn.setText("✅AL DÍA")
-            self._sec_btn.show()
-            self._sec_btn.setEnabled(False)
-
-            self._chk_spin.stop()
-
+            if remote_version:
+                self._current_version = remote_version
             health_text, health_color = self._modpack_health_status()
             if health_color == T.WARN:
                 self._set_st("FALTA ACTUALIZAR", T.WARN)
-                self._log.append_log(f"⚠️ {health_text}. Se recomienda actualizar.")
+                if changed:
+                    self._log.append_log(f"⚠️ {health_text}. Se recomienda actualizar.")
             else:
                 self._set_st("LISTO PARA JUGAR", T.ACCENT_HI)
-                self._log.append_log("✅ Todo actualizado. Listo para iniciar.")
-
-            # Volver la insignia al estilo normal "Modpack v..."
-            version = remote_version or getattr(self, "_current_version", "")
-            if version:
-                self.update_version_badge(version)
+                if changed:
+                    self._log.append_log("✅ Todo actualizado. Listo para iniciar.")
+            self.update_version_badge(self._current_version)
 
         elif state == self.S_BUSY:
-
-            self._main_btn.setText("PROCESANDO...")
-            self._main_btn.setEnabled(False)
-
-            self._sec_btn.setEnabled(False)
-
-            self._chk_spin.stop()
+            self._overlay_wanted = True
 
         elif state == self.S_ERROR:
-
-            self._main_btn.setText("REINTENTAR")
-            self._main_btn.setMode("install")
-            self._main_btn.setEnabled(True)
-
-            self._sec_btn.setEnabled(False)
-
-            self._chk_spin.stop()
-
-            self._set_st(
-                "ERROR",
-                T.ERROR
-            )
-
+            self._set_st("ERROR", T.ERROR)
             self._bar.setValue(0)
             self._pct_lbl.setText("")
+            # Mostrar el registro para que se vea qué falló.
+            self._overlay_wanted = True
+
+        if state in (self.S_READY, self.S_NONE, self.S_UPDATE, self.S_CHECKING):
+            self._checked_at = QDateTime.currentDateTime()
 
         self._update_home_state()
         self._update_modpack_page_state()
         self._sidebar_status_update()
-        if hasattr(self, "_refresh_news"):
-            self._refresh_news()
+        self._refresh_repair_button()
+        self._refresh_news()
 
-        # Overlay de progreso: solo durante instalación/actualización
-        if state == self.S_BUSY:
+        if self._overlay_wanted and state in (self.S_BUSY, self.S_ERROR):
             self._show_progress_overlay()
-        elif state == self.S_READY:
-            self._hide_progress_overlay()
 
     def _set_st(self, text, color):
         self._st_lbl.setText(text)
@@ -2370,36 +2397,55 @@ class MainScreen(QWidget):
 
     def set_done_ok(self):
         self._bar.setValue(100); self._pct_lbl.setText("100%")
-        version = getattr(self, "_current_version", "")
-        self.set_state(self.S_READY, version)
+        # Tras instalar/actualizar, la versión instalada es la que quedó en disco.
+        self._current_version = _installed_modpack_version() or self._current_version
+        self.set_state(self.S_READY)
+        # Dejar ver el final del registro un momento antes de ocultarlo.
+        self.schedule_overlay_hide()
+
+    def _auto_hide_overlay(self):
+        if self._state not in (self.S_BUSY, self.S_ERROR, self.S_CHECKING):
+            self._hide_progress_overlay()
+
+    def schedule_overlay_hide(self, ms=3500):
+        QTimer.singleShot(ms, self._auto_hide_overlay)
+
+    def mark_version_installed(self, version):
+        if hasattr(self, "_version_list"):
+            self._version_list.mark_installed(version)
+        self._update_home_state()
 
     def set_status_text(self, text):
         self._st_lbl.setText(text.upper())
+        if self._state == self.S_BUSY:
+            self._busy_text = text
+            self._sidebar_status_update()
         if hasattr(self, "_modpack_status_lbl"):
             self._modpack_status_lbl.setText(text)
 
     def on_progress(self, v):
+        v = max(0, min(100, int(v)))
         self._bar.setValue(v)
         self._pct_lbl.setText(f"{v}%")
         if hasattr(self, "_modpack_bar"):
             self._modpack_bar.setValue(v)
             self._modpack_pct_lbl.setText(f"{v}%")
+        if self._state == self.S_BUSY:
+            self._sidebar_status_update()
+
     def append_log(self, text): self._log.append_log(text)
 
-    def update_version_badge(self, version):
-        self._ver_badge.setText(f"Modpack v{version}")
-        self._ver_badge.setStyleSheet(f"font-family:'{T.FONT_MONO}'; font-size:10px; color:{T.ACCENT_HI};"
-            f" background:{T.rgba(T.ACCENT,0.09)}; border:1px solid {T.rgba(T.ACCENT,0.22)};"
-            " border-radius:4px; padding:3px 10px;")
+    def _ver_badge_qss(self, color):
+        return (f"font-family:'{T.FONT_MONO}'; font-size:10px; color:{color};"
+                f" background:{T.rgba(color, 0.09)}; border:1px solid {T.rgba(color, 0.25)};"
+                " border-radius:4px; padding:0px 10px;")
 
-    def _on_main(self):
-        if self._state in (self.S_NONE, self.S_ERROR):
-            self.request_action.emit("install")
-        elif self._state == self.S_UPDATE:
-            self.request_action.emit("update")
-        elif self._state == self.S_READY:
-            self.request_action.emit("play")    # ← JUGAR ahora SÍ abre Minecraft
+    def update_version_badge(self, version=None):
+        version = version or self._current_version
+        self._ver_badge.setText(f"Modpack v{version}" if version else "Modpack")
+        self._ver_badge.setStyleSheet(self._ver_badge_qss(T.ACCENT_HI))
 
-    def _on_sec(self):
-        if self._state == self.S_UPDATE:
-            self.request_action.emit("play")
+    def set_maximized(self, maximized):
+        """MainWindow avisa para cambiar el ícono del botón maximizar."""
+        self._max_btn.setSymbol("❐" if maximized else "□")
+        self._max_btn.setToolTip("Restaurar" if maximized else "Maximizar")

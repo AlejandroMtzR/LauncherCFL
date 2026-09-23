@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
+import re
 
 APP_DIR = os.path.join(os.getenv("APPDATA", os.path.expanduser("~")), "CFLLauncher")
 os.makedirs(APP_DIR, exist_ok=True)
@@ -47,6 +48,24 @@ def clear_minecraft_dir_override():
         os.remove(GAMEDIR_OVERRIDE_FILE)
     except OSError:
         pass
+
+
+# =========================================================================
+# INSTANCIAS INDEPENDIENTES (versiones que NO son el modpack)
+# =========================================================================
+# Cada versión "suelta" (vanilla, snapshot, Forge sin el pack...) juega en su
+# propia carpeta de juego: mundos, opciones, mods y resourcepacks separados
+# del modpack. Viven fuera de .minecraft para que instalar, actualizar o
+# reparar el modpack nunca las toque.
+INSTANCES_DIR = os.path.join(APP_DIR, "instances")
+
+
+def instance_dir(name: str) -> str:
+    """Carpeta de juego de una instancia (se crea si no existe)."""
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or "")).strip("._") or "default"
+    path = os.path.join(INSTANCES_DIR, safe)
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 # =========================================================================

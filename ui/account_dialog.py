@@ -55,6 +55,7 @@ class AccountDialog(QDialog):
         self.account = accounts.Account(
             mode="premium", username="", uuid="", token=""
         )
+        accounts.save(self.account)
         self.accept()
 
     def _on_offline_choice(self):

@@ -20,8 +20,8 @@ import os
 import glob
 import shutil
 import zipfile
-import subprocess
 from config import ZIP_NAME
+from core.paths import get_minecraft_dir
 
 
 DELETE_MANIFEST = "delete.txt"
@@ -38,13 +38,11 @@ def find_folder(base, name):
 # 🔍 DETECTAR SI MINECRAFT ESTÁ ABIERTO
 # =========================
 def is_minecraft_running():
+    # Antes bastaba CUALQUIER javaw.exe (un IDE, otro programa Java...) para
+    # bloquear la actualización. Ahora se busca Minecraft de verdad.
     try:
-        result = subprocess.check_output(
-            ["tasklist", "/FI", "IMAGENAME eq javaw.exe"],
-            stderr=subprocess.DEVNULL,
-            creationflags=0x08000000  # sin ventana
-        ).decode(errors="ignore")
-        return "javaw.exe" in result
+        from core import game_launcher
+        return game_launcher.is_game_running()
     except Exception:
         return False
 
@@ -54,11 +52,13 @@ def is_minecraft_running():
 # =========================
 def remove_entry(path, log):
     try:
-        if os.path.isdir(path):
-            shutil.rmtree(path, ignore_errors=True)
+        if os.path.islink(path):
+            os.unlink(path)
+        elif os.path.isdir(path):
+            shutil.rmtree(path)
         elif os.path.exists(path):
             os.remove(path)
-        return True
+        return not os.path.lexists(path)
     except PermissionError:
         log(f"⚠️ Sin permisos para eliminar (saltando): {os.path.basename(path)}")
         return False
@@ -89,7 +89,7 @@ def find_overlay_root(temp):
 def process_deletions(src_root, mc_path, log):
     manifest = os.path.join(src_root, DELETE_MANIFEST)
     if not os.path.exists(manifest):
-        return
+        return 0
 
     log("🗑  Procesando borrados (delete.txt)...")
     with open(manifest, encoding="utf-8") as f:
@@ -98,9 +98,28 @@ def process_deletions(src_root, mc_path, log):
             if ln.strip() and not ln.strip().startswith("#")
         ]
 
+    base = os.path.realpath(os.path.abspath(mc_path))
+    failures = 0
+
     for rel in lines:
-        rel     = rel.replace("/", os.sep).replace("\\", os.sep)
-        pattern = os.path.join(mc_path, rel)
+        rel = rel.replace("/", os.sep).replace("\\", os.sep)
+        drive, _tail = os.path.splitdrive(rel)
+        normalized = os.path.normpath(rel)
+        if (
+            drive
+            or os.path.isabs(rel)
+            or normalized in ("", ".", "..")
+            or normalized.startswith(".." + os.sep)
+        ):
+            raise ValueError(f"Ruta insegura en {DELETE_MANIFEST}: {rel}")
+
+        pattern = os.path.abspath(os.path.join(base, normalized))
+        try:
+            if os.path.commonpath((base, pattern)) != base:
+                raise ValueError(f"Ruta fuera de .minecraft en {DELETE_MANIFEST}: {rel}")
+        except ValueError:
+            raise ValueError(f"Ruta insegura en {DELETE_MANIFEST}: {rel}")
+
         matches = glob.glob(pattern)   # acepta comodines: *, ?, [..]
 
         if not matches:
@@ -108,8 +127,34 @@ def process_deletions(src_root, mc_path, log):
             continue
 
         for target in matches:
+            target_abs = os.path.abspath(target)
+            try:
+                if os.path.commonpath((base, target_abs)) != base:
+                    raise ValueError(
+                        f"Coincidencia fuera de .minecraft en {DELETE_MANIFEST}: {rel}"
+                    )
+            except ValueError:
+                raise ValueError(f"Coincidencia insegura en {DELETE_MANIFEST}: {rel}")
+
+            # No seguir enlaces que apunten fuera de la instancia. El enlace
+            # mismo se puede retirar con seguridad; cualquier otro destino
+            # debe resolver dentro de .minecraft.
+            if not os.path.islink(target):
+                target_real = os.path.realpath(target)
+                try:
+                    if os.path.commonpath((base, target_real)) != base:
+                        raise ValueError(
+                            f"Destino enlazado fuera de .minecraft: {rel}"
+                        )
+                except ValueError:
+                    raise ValueError(f"Destino inseguro en {DELETE_MANIFEST}: {rel}")
+
             if remove_entry(target, log):
                 log(f"🗑  Eliminado: {os.path.relpath(target, mc_path)}")
+            else:
+                failures += 1
+
+    return failures
 
 
 # =========================
@@ -138,7 +183,11 @@ def overlay_copy(src_root, mc_path, log, progress):
             os.makedirs(os.path.dirname(dst), exist_ok=True)
             shutil.copy2(file, dst)
             copied += 1
-            log(f"  ✓ {relative}")
+            # Loguear cada archivo satura el log con overlays grandes.
+            if copied <= 40 or relative.lower().startswith("mods"):
+                log(f"  ✓ {relative}")
+            elif copied == 41:
+                log("  … (más archivos de configuración)")
         except PermissionError:
             skipped += 1
             log(f"⚠️ Sin permisos (saltando): {relative}")
@@ -154,6 +203,7 @@ def overlay_copy(src_root, mc_path, log, progress):
     log(f"📥 {copied} archivo(s) copiado(s)/reemplazado(s)")
     if skipped:
         log(f"⚠️ {skipped} saltado(s)")
+    return skipped
 
 
 # =========================
@@ -172,7 +222,7 @@ def update_modpack(log, progress):
         raise Exception(f"No se encontró el archivo: {ZIP_NAME}")
 
     appdata = os.getenv("APPDATA")
-    mc_path = os.path.join(appdata, ".minecraft")
+    mc_path = get_minecraft_dir()
     temp    = os.path.join(os.getenv("TEMP", appdata), "mc_update_temp")
 
     shutil.rmtree(temp, ignore_errors=True)
@@ -197,11 +247,11 @@ def update_modpack(log, progress):
     src_root = find_overlay_root(temp)
 
     # ── 1) Borrar lo indicado en delete.txt ────────────────────────
-    process_deletions(src_root, mc_path, log)
+    deletion_failures = process_deletions(src_root, mc_path, log)
 
     # ── 2) Copiar/reemplazar solo lo que trae el ZIP ───────────────
     log("🔄 Aplicando archivos (modo capa)...")
-    overlay_copy(src_root, mc_path, log, progress)
+    copy_failures = overlay_copy(src_root, mc_path, log, progress)
 
     # ── Limpieza ───────────────────────────────────────────────────
     shutil.rmtree(temp, ignore_errors=True)
@@ -212,3 +262,4 @@ def update_modpack(log, progress):
     progress(100)
     log("────────────────────────────")
     log("🎉 ¡Actualización finalizada!")
+    return deletion_failures + copy_failures

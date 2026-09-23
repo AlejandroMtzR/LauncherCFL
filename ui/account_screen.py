@@ -176,12 +176,17 @@ class ChoiceCard(QFrame):
 # ═══════════════════════════════════════════════════════════════════════════
 class AccountScreen(QWidget):
     account_ready = Signal(object)  # emite un accounts.Account
+    cancelled = Signal()            # "Volver al launcher" al cambiar de cuenta
 
     def __init__(self, resource_fn=None, parent=None):
         super().__init__(parent)
         self._resource_fn = resource_fn
         self._skin_path = ""
         self._build()
+
+    def set_can_cancel(self, can_cancel):
+        """Muestra 'Volver al launcher' cuando ya hay una cuenta activa."""
+        self._cancel_btn.setVisible(bool(can_cancel))
 
     # ── construcción ──────────────────────────────────────────────
     def _build(self):
@@ -255,11 +260,20 @@ class AccountScreen(QWidget):
         foot = QLabel("El modo offline requiere tener el juego. Úsalo solo entre amigos "
                       "en el server privado.")
         foot.setAlignment(Qt.AlignCenter)
-        foot.setWordWrap(True)
+        # Sin wordWrap: dentro de un layout alineado, el QLabel multilínea
+        # recibía la altura de una sola línea y el texto se cortaba.
         foot.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; color:{T.DIM};"
                            f" background:transparent;")
         foot.setMaximumWidth(540)
         lay.addWidget(foot, alignment=Qt.AlignCenter)
+        lay.addSpacing(10)
+
+        self._cancel_btn = QPushButton("←  Volver al launcher")
+        self._cancel_btn.setCursor(Qt.PointingHandCursor)
+        self._cancel_btn.setStyleSheet(self._ghost_btn_qss())
+        self._cancel_btn.clicked.connect(self.cancelled.emit)
+        self._cancel_btn.hide()
+        lay.addWidget(self._cancel_btn, alignment=Qt.AlignCenter)
 
         return page
 
@@ -354,7 +368,7 @@ class AccountScreen(QWidget):
         right.addLayout(btns)
 
         note = QLabel("Tu nombre se guarda para la próxima. La skin se ve en ChafaLand "
-                      "con SkinsRestorer (te ayudo a activarlo).")
+                      "con SkinsRestorer.")
         note.setWordWrap(True)
         note.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px; color:{T.DIM};"
                            f" background:transparent;")
@@ -411,7 +425,9 @@ class AccountScreen(QWidget):
             self._skin_lbl.setText("Steve por defecto")
 
     def _choose_premium(self):
-        self.account_ready.emit(accounts.Account(mode="premium", username="", uuid="", token=""))
+        acc = accounts.Account(mode="premium", username="", uuid="", token="")
+        accounts.save(acc)
+        self.account_ready.emit(acc)
 
     def _goto_offline(self):
         self._steps.setCurrentIndex(1)
@@ -428,7 +444,7 @@ class AccountScreen(QWidget):
                                      f" color:{T.MUTED}; background:transparent;")
             self._name.setStyleSheet(self._input_qss(T.BORDER))
         elif valid:
-            self._hint.setText("✓  Nombre disponible")
+            self._hint.setText("✓  Nombre válido")
             self._hint.setStyleSheet(f"font-family:'{T.FONT}'; font-size:10px;"
                                      f" color:{T.OK}; background:transparent;")
             self._name.setStyleSheet(self._input_qss(T.rgba(T.OK, 0.5)))
